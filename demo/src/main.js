@@ -18,7 +18,7 @@ import { Color3, Color4 } from '@babylonjs/core/Maths/math.color.js';
 import { CubeTexture } from '@babylonjs/core/Materials/Textures/cubeTexture.js';
 import { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial.js';
 import { VertexBuffer } from '@babylonjs/core/Buffers/buffer.js';
-import { AppendSceneAsync } from '@babylonjs/core/Loading/sceneLoader.js';
+import { LoadAssetContainerAsync } from '@babylonjs/core/Loading/sceneLoader.js';
 
 // Side-effect imports: the scene helpers back createDefaultSkybox, and the glTF registration
 // is what lets AppendSceneAsync recognise the '.glb' the converter produces.
@@ -87,7 +87,33 @@ engine.runRenderLoop(() => scene.render());
 addEventListener('resize', () => engine.resize());
 
 // Exposed for debugging from the console / automated checks.
-globalThis.__demo = { engine, scene, camera };
+globalThis.__demo = { engine, scene, camera, getLoaded: () => loadedContainer };
+
+// Everything the current asset added to the scene. Holding it in a container is what makes
+// unloading exact: disposing it removes precisely the meshes, materials, textures, skeletons,
+// animation groups and any lights or cameras the asset brought with it, and nothing else. The
+// demo's own camera, fill light and environment texture are never part of it and so survive.
+let loadedContainer = null;
+
+/** Releases the previously loaded asset, leaving the demo's own camera and lighting intact. */
+function disposeLoadedAsset() {
+    if (!loadedContainer) return;
+
+    // Animation groups keep running against targets that are about to disappear.
+    for (const group of loadedContainer.animationGroups) group.stop();
+
+    // A camera or light inside the asset can have been made active. Hand control back to the
+    // demo's own camera first, because disposing the active camera detaches its controls.
+    if (loadedContainer.cameras.includes(scene.activeCamera)) {
+        scene.activeCamera = camera;
+        camera.attachControl(els.canvas, true);
+    }
+
+    // Materials created here rather than by the loader are pushed into the container when
+    // they are made, so disposing it releases them too.
+    loadedContainer.dispose();
+    loadedContainer = null;
+}
 
 /**
  * Adobe's exporter only writes a glTF material when the USD prim has a `material:binding`.
@@ -96,9 +122,11 @@ globalThis.__demo = { engine, scene, camera };
  * white, fully-reflective surface instead of the authored colour.
  *
  * This gives those meshes a PBR material that actually consumes COLOR_0.
+ * @param {import('@babylonjs/core').AssetContainer} container the asset that was just loaded
+ * @param {import('@babylonjs/core').AbstractMesh[]} meshes the meshes to inspect
  */
-function applyVertexColorMaterials() {
-    for (const mesh of scene.meshes) {
+function applyVertexColorMaterials(container, meshes) {
+    for (const mesh of meshes) {
         if (mesh.getTotalVertices() === 0) continue;
         if (!mesh.isVerticesDataPresent(VertexBuffer.ColorKind)) continue;
 
@@ -114,25 +142,17 @@ function applyVertexColorMaterials() {
         material.backFaceCulling = false;
         mesh.material = material;
         mesh.useVertexColors = true;
+        // Hand ownership to the container so this material is released with the asset
+        // rather than leaking one per mesh on every load.
+        container.materials.push(material);
     }
 }
 
-/** Removes previously loaded content, leaving camera and lights intact. */
-function clearScene() {
-    for (const mesh of [...scene.meshes]) mesh.dispose(false, true);
-    for (const material of [...scene.materials]) material.dispose(true, true);
-    for (const texture of [...scene.textures]) {
-        if (texture !== scene.environmentTexture) texture.dispose();
-    }
-    for (const group of [...scene.animationGroups]) group.dispose();
-    for (const skeleton of [...scene.skeletons]) skeleton.dispose();
-    // Transform nodes come from the glTF node hierarchy.
-    for (const node of [...scene.transformNodes]) node.dispose();
-}
-
-/** Frames the camera on everything currently loaded. */
-function frameScene() {
-    const meshes = scene.meshes.filter((m) => m.getTotalVertices() > 0);
+/**
+ * Frames the camera on the given meshes.
+ * @param {import('@babylonjs/core').AbstractMesh[]} meshes the meshes to fit in view
+ */
+function frameScene(meshes) {
     if (meshes.length === 0) return;
 
     let min = null;
@@ -195,15 +215,45 @@ setStatus(`Ready — OpenUSD ${info.usdVersion}`);
 log(`OpenUSD ${info.usdVersion} loaded. Writable formats: ${info.supportedOutputFormats.join(', ')}`);
 log(`Adobe usdGltf plugin: ${info.gltfPluginAvailable ? 'registered' : 'MISSING'}`);
 log(`Asset resolver: ${info.resolver}`);
-els.file.disabled = false;
-els.folder.disabled = false;
+setBusy(false);
 
 // --- conversion ------------------------------------------------------------
 
+// Loads are serialised and only the newest one is allowed to touch the scene. Without this a
+// file dropped while another is still converting would interleave: the second load would clear
+// the scene midway through the first one's population, leaving a half-built scene and stale
+// statistics. Large assets take seconds to convert, so that window is easy to hit.
+let loadGeneration = 0;
+let pendingLoad = Promise.resolve();
+
+function setBusy(busy) {
+    els.file.disabled = busy;
+    els.folder.disabled = busy;
+    for (const button of els.samples.querySelectorAll('button')) button.disabled = busy;
+}
+
 async function loadUsd(bytes, fileName, additionalFiles = undefined) {
+    const generation = ++loadGeneration;
+
+    // Chain onto whatever is in flight so two loads never overlap, and keep the chain alive
+    // if one of them fails.
+    const run = pendingLoad.then(
+        () => runLoad(generation, bytes, fileName, additionalFiles),
+        () => runLoad(generation, bytes, fileName, additionalFiles),
+    );
+    pendingLoad = run.catch(() => undefined);
+    return run;
+}
+
+async function runLoad(generation, bytes, fileName, additionalFiles) {
+    // A newer request arrived while this one was queued, so this result would be thrown away
+    // the moment it landed. Skip the work entirely.
+    if (generation !== loadGeneration) return;
+
     els.log.replaceChildren();
     els.stats.replaceChildren();
     setStatus(`Converting ${fileName}…`, true);
+    setBusy(true);
 
     try {
         const started = performance.now();
@@ -212,6 +262,8 @@ async function loadUsd(bytes, fileName, additionalFiles = undefined) {
             additionalFiles,
         });
         const convertMs = performance.now() - started;
+
+        if (generation !== loadGeneration) return;
 
         log(`Converted to GLB: ${formatBytes(data.byteLength)} in ${durationMs.toFixed(0)} ms`);
 
@@ -223,18 +275,29 @@ async function loadUsd(bytes, fileName, additionalFiles = undefined) {
             );
         }
 
-        clearScene();
-
         const loadStarted = performance.now();
-        // Babylon accepts an ArrayBufferView directly; pluginExtension tells it which
-        // loader to use, since there is no filename to infer from.
-        await AppendSceneAsync(data, scene, { pluginExtension: '.glb' });
+        // Load into a container rather than straight into the scene: the container is the
+        // record of what this asset added, which is what makes unloading it exact. Babylon
+        // accepts an ArrayBufferView directly; pluginExtension tells it which loader to use,
+        // since there is no filename to infer from.
+        const container = await LoadAssetContainerAsync(data, scene, { pluginExtension: '.glb' });
+
+        // Only release the old asset once the new one has loaded, so a failure part-way
+        // through leaves the previous scene on screen rather than an empty one.
+        if (generation !== loadGeneration) {
+            container.dispose();
+            return;
+        }
+
+        disposeLoadedAsset();
+        container.addAllToScene();
+        loadedContainer = container;
         const loadMs = performance.now() - loadStarted;
 
-        applyVertexColorMaterials();
-        frameScene();
+        const meshes = container.meshes.filter((m) => m.getTotalVertices() > 0);
+        applyVertexColorMaterials(container, meshes);
+        frameScene(meshes);
 
-        const meshes = scene.meshes.filter((m) => m.getTotalVertices() > 0);
         const vertices = meshes.reduce((sum, m) => sum + m.getTotalVertices(), 0);
         const triangles = meshes.reduce((sum, m) => sum + (m.getTotalIndices() / 3 || 0), 0);
 
@@ -247,15 +310,17 @@ async function loadUsd(bytes, fileName, additionalFiles = undefined) {
             ['Meshes', String(meshes.length)],
             ['Vertices', vertices.toLocaleString()],
             ['Triangles', Math.round(triangles).toLocaleString()],
-            ['Materials', String(scene.materials.length)],
-            ['Animations', String(scene.animationGroups.length)],
-            ['Skeletons', String(scene.skeletons.length)],
+            ['Materials', String(container.materials.length)],
+            ['Animations', String(container.animationGroups.length)],
+            ['Skeletons', String(container.skeletons.length)],
         ]);
 
-        for (const group of scene.animationGroups) group.play(true);
+        for (const group of container.animationGroups) group.play(true);
 
         setStatus(`${fileName} — ${meshes.length} meshes, ${vertices.toLocaleString()} vertices`);
     } catch (error) {
+        if (generation !== loadGeneration) return;
+
         setStatus('Conversion failed.');
         log(String(error?.message ?? error), 'error');
         console.error(error);
@@ -265,11 +330,20 @@ async function loadUsd(bytes, fileName, additionalFiles = undefined) {
         if (converter.aborted) {
             log('The WebAssembly runtime aborted. Reloading the module…', 'warning');
             setStatus('Reloading module…', true);
-            converter = await UsdConverter.create({
-                onLog: (m) => m.level !== 'info' && log(m.message, m.level),
-            });
-            setStatus(`Ready — OpenUSD ${converter.info.usdVersion}`);
+            try {
+                converter = await UsdConverter.create({
+                    onLog: (m) => m.level !== 'info' && log(m.message, m.level),
+                });
+                setStatus(`Ready — OpenUSD ${converter.info.usdVersion}`);
+            } catch (reloadError) {
+                setStatus('The WebAssembly module could not be reloaded. Refresh the page.');
+                log(String(reloadError?.message ?? reloadError), 'error');
+            }
         }
+    } finally {
+        // Leave the controls disabled if a newer load is already queued behind this one;
+        // that load re-enables them when it settles.
+        if (generation === loadGeneration) setBusy(false);
     }
 }
 
@@ -377,8 +451,17 @@ async function collectEntry(entry, prefix = '') {
     return [];
 }
 
-els.file.addEventListener('change', (event) => loadFileSet([...event.target.files]));
-els.folder.addEventListener('change', (event) => loadFileSet([...event.target.files]));
+// A file input does not fire `change` when the same file is picked again, because its value
+// is unchanged. Clearing it after each selection means re-picking the same asset reloads it.
+async function handleInput(event) {
+    const input = event.target;
+    const files = [...input.files];
+    input.value = '';
+    await loadFileSet(files);
+}
+
+els.file.addEventListener('change', handleInput);
+els.folder.addEventListener('change', handleInput);
 
 for (const type of ['dragenter', 'dragover']) {
     document.addEventListener(type, (e) => {
@@ -394,29 +477,44 @@ for (const type of ['dragleave', 'drop']) {
 }
 
 document.addEventListener('drop', async (event) => {
-    const items = [...(event.dataTransfer?.items ?? [])];
-    const entries = items
-        .map((item) => item.webkitGetAsEntry?.())
-        .filter((entry) => entry != null);
+    try {
+        const items = [...(event.dataTransfer?.items ?? [])];
+        const entries = items.map((item) => item.webkitGetAsEntry?.()).filter((entry) => entry != null);
 
-    if (entries.length > 0) {
-        setStatus('Reading dropped files…', true);
-        const collected = await Promise.all(entries.map((entry) => collectEntry(entry)));
-        await loadFileSet(collected.flat());
-        return;
+        if (entries.length > 0) {
+            setStatus('Reading dropped files…', true);
+            const collected = await Promise.all(entries.map((entry) => collectEntry(entry)));
+            await loadFileSet(collected.flat());
+            return;
+        }
+
+        // Some sources hand over plain files with no filesystem entry. A dropped folder
+        // arrives that way as a zero-byte placeholder, which cannot be read.
+        const files = [...(event.dataTransfer?.files ?? [])].filter((file) => file.size > 0 || isUsd(file.name));
+        await loadFileSet(files);
+    } catch (error) {
+        // Without this the controls would stay disabled and the app would look wedged.
+        setStatus('Could not read the dropped files.');
+        log(String(error?.message ?? error), 'error');
+        console.error(error);
+        setBusy(false);
     }
-
-    await loadFileSet([...(event.dataTransfer?.files ?? [])]);
 });
 
 els.samples.addEventListener('click', async (event) => {
     const name = event.target?.dataset?.sample;
     if (!name) return;
     setStatus(`Fetching ${name}…`, true);
-    const response = await fetch(`./assets/${name}`);
-    if (!response.ok) {
+    try {
+        const response = await fetch(`./assets/${name}`);
+        if (!response.ok) {
+            setStatus(`Could not fetch ${name}.`);
+            return;
+        }
+        await loadUsd(new Uint8Array(await response.arrayBuffer()), name);
+    } catch (error) {
         setStatus(`Could not fetch ${name}.`);
-        return;
+        log(String(error?.message ?? error), 'error');
+        setBusy(false);
     }
-    await loadUsd(new Uint8Array(await response.arrayBuffer()), name);
 });
