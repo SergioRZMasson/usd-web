@@ -1,0 +1,27 @@
+# Git must not apply end-of-line conversion to binary files. Emscripten's `.data` bundle in
+# particular has no NUL bytes near its start, so git's auto-detection treats it as text and
+# silently strips CR bytes on commit — corrupting the file that GitHub Pages then serves.
+# This was observed: an 825,774-byte bundle was stored as 821,440 bytes.
+*.wasm      binary
+*.data      binary
+*.glb       binary
+*.usdc      binary
+*.usdz      binary
+*.png       binary
+*.jpg       binary
+*.exr       binary
+
+# Source files are text; normalise them in the repository and check them out with native
+# line endings.
+*.c         text
+*.cpp       text
+*.h         text
+*.ts        text
+*.js        text
+*.mjs       text
+*.json      text
+*.md        text
+*.yml       text
+*.html      text
+*.usda      text
+*.ps1       text eol=crlf

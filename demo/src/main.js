@@ -8,7 +8,7 @@
 import { UsdConverter } from 'usd-web-gltf';
 
 // Deep imports rather than the "@babylonjs/core" barrel: the barrel defeats tree shaking
-// and roughly doubles the bundle, which matters because dist/ is committed.
+// and roughly doubles the bundle, which matters because docs/ is committed.
 import { Engine } from '@babylonjs/core/Engines/engine.js';
 import { Scene } from '@babylonjs/core/scene.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';

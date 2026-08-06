@@ -13,6 +13,8 @@ const glb = await usdToGlb(await file.arrayBuffer(), { fileName: file.name });
 **[▶ Live demo](https://sergiorzmasson.github.io/usd-web/)** — drop in a USD file and see
 it rendered.
 
+![Five UsdPreviewSurface materials converted to KHR_materials_* and rendered in Babylon.js](demo/screenshots/sample-materials.png)
+
 ---
 
 ## Why this exists
@@ -115,7 +117,7 @@ Then the npm package and the demo:
 
 ```powershell
 cd js;   npm install; npm run build
-cd ../demo; npm install; npm run build   # writes ../dist
+cd ../demo; npm install; npm run build   # writes ../docs
 ```
 
 ### Pinned versions, and why
@@ -374,22 +376,26 @@ src/                    C++ — Emscripten bindings, stb image backend, WebResol
 resources/              plugInfo.json manifests for the statically-linked plugins
 scripts/build.ps1       builds oneTBB, OpenUSD, tinygltf and this project
 js/                     the npm package (TypeScript)
-demo/                   browser demo source; `npm run build` writes ../dist
+demo/                   browser demo source; `npm run build` writes ../docs
 demo/babylon-loader-test/   integration test for the Babylon.js USD loader
-dist/                   built demo + wasm, committed and published by GitHub Pages
+docs/                   built demo + wasm, committed and published by GitHub Pages
 test/                   node-based conversion and resolver tests
 ```
 
-`dist/` is committed on purpose: GitHub Pages serves it directly, so partners can try the
+`docs/` is committed on purpose: GitHub Pages serves it directly, so partners can try the
 converter from a URL without installing a toolchain. It is ~17 MB, dominated by the 12 MB
 `.wasm`.
+
+The folder is named `docs` rather than `dist` because GitHub Pages can only serve `/` or
+`/docs` when deploying from a branch. Publishing any other folder would require a Actions
+workflow; serving `/docs` needs no CI at all.
 
 ## Running the demo locally
 
 ```powershell
 cd demo
 npm install
-npm start        # builds ../dist and serves it at http://localhost:8080
+npm start        # builds ../docs and serves it at http://localhost:8080
 ```
 
 Sample assets are in [`demo/assets`](demo/assets), including a multi-file scene that

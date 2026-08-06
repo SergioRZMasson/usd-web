@@ -1,8 +1,10 @@
-// Builds the browser demo into the repository's `dist/` folder.
+// Builds the browser demo into the repository's `docs/` folder.
 //
-// `dist/` is committed and published by GitHub Pages (see .github/workflows/pages.yml), so
-// partners can try the converter without building anything. It is self-contained: the demo
-// app, the WebAssembly artifacts and the sample USD files.
+// `docs/` is committed and published by GitHub Pages, so partners can try the converter
+// without building anything. GitHub Pages can only serve `/` or `/docs` when deploying
+// from a branch, which is why the folder is named `docs` rather than `dist`.
+//
+// It is self-contained: the demo app, the WebAssembly artifacts and the sample USD files.
 
 import { build, context } from "esbuild";
 import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
@@ -12,22 +14,22 @@ import { dirname, resolve } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const demoRoot = resolve(here, "..");
 const projectRoot = resolve(demoRoot, "..");
-const distDir = resolve(projectRoot, "dist");
+const siteDir = resolve(projectRoot, "docs");
 const watch = process.argv.includes("--watch");
 
-await rm(distDir, { recursive: true, force: true });
-await mkdir(distDir, { recursive: true });
+await rm(siteDir, { recursive: true, force: true });
+await mkdir(siteDir, { recursive: true });
 
 // Tells GitHub Pages to serve the folder verbatim instead of running it through Jekyll,
 // which would otherwise skip files and folders beginning with an underscore.
-await writeFile(resolve(distDir, ".nojekyll"), "");
+await writeFile(resolve(siteDir, ".nojekyll"), "");
 
-await cp(resolve(demoRoot, "index.html"), resolve(distDir, "index.html"));
+await cp(resolve(demoRoot, "index.html"), resolve(siteDir, "index.html"));
 
 // The Emscripten glue, the wasm binary and the resource bundle must ship together: the
 // glue resolves its siblings relative to its own URL.
 const wasmSource = resolve(projectRoot, "js/dist/wasm");
-const wasmTarget = resolve(distDir, "wasm");
+const wasmTarget = resolve(siteDir, "wasm");
 await mkdir(wasmTarget, { recursive: true });
 for (const file of await readdir(wasmSource)) {
     await cp(resolve(wasmSource, file), resolve(wasmTarget, file));
@@ -35,16 +37,16 @@ for (const file of await readdir(wasmSource)) {
 console.log(`staged WebAssembly artifacts -> ${wasmTarget}`);
 
 // Sample USD assets, including the multi-file scene.
-await cp(resolve(demoRoot, "assets"), resolve(distDir, "assets"), { recursive: true });
-console.log(`staged sample assets -> ${resolve(distDir, "assets")}`);
+await cp(resolve(demoRoot, "assets"), resolve(siteDir, "assets"), { recursive: true });
+console.log(`staged sample assets -> ${resolve(siteDir, "assets")}`);
 
 const options = {
     entryPoints: [resolve(demoRoot, "src/main.js")],
-    outfile: resolve(distDir, "app.js"),
+    outfile: resolve(siteDir, "app.js"),
     bundle: true,
     format: "esm",
     target: "es2022",
-    // dist/ is committed, so the bundle is minified and shipped without a source map.
+    // docs/ is committed, so the bundle is minified and shipped without a source map.
     // Unminified it is ~14 MB (Babylon.js is bundled whole) versus ~4 MB minified, and the
     // map alone would add another ~24 MB of history for no benefit to a published demo.
     minify: !watch,
@@ -61,5 +63,5 @@ if (watch) {
     console.log("watching for changes...");
 } else {
     await build(options);
-    console.log(`demo built into ${distDir}`);
+    console.log(`demo built into ${siteDir}`);
 }
