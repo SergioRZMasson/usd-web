@@ -1,6 +1,6 @@
-# Native build output
+# Native build output (build/ = pthreads, build-st/ = single-threaded, plus experiments)
 build/
-build-st/
+build-*/
 
 # Dependencies
 node_modules/
