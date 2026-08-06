@@ -57,14 +57,14 @@ Release build, OpenUSD 26.08, no imaging, no Python, single-threaded:
 
 | Artifact | Raw | gzip | brotli |
 |---|---:|---:|---:|
-| `usd-web-gltf.wasm` | 12.00 MB | 3.09 MB | 1.92 MB |
+| `usd-web-gltf.wasm` | 12.00 MB | 3.02 MB | 1.87 MB |
 | `usd-web-gltf.data` (USD schemas & plugin manifests) | 0.79 MB | 0.14 MB | 0.10 MB |
-| `usd-web-gltf.js` (Emscripten glue) | 0.13 MB | 0.04 MB | 0.03 MB |
-| **Total** | **12.92 MB** | **3.27 MB** | **2.05 MB** |
+| `usd-web-gltf.js` (Emscripten glue) | 0.13 MB | 0.03 MB | 0.03 MB |
+| **Total** | **12.92 MB** | **3.19 MB** | **2.00 MB** |
 
 For reference, USD core alone — able to open a stage and read geometry, but with no glTF
 plugin — measures 10.86 MB raw / 1.62 MB brotli. **Adobe's entire importer *and* exporter
-therefore costs about 1.9 MB raw, 0.43 MB brotli.** OpenUSD itself is the cost; the
+therefore costs about 1.9 MB raw, 0.4 MB brotli.** OpenUSD itself is the cost; the
 converter is nearly free.
 
 **Serve the `.wasm` with brotli.** It is the difference between 12 MB and 1.9 MB on the wire.
