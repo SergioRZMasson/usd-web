@@ -1,0 +1,23 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+)
+
+def Xform "World"
+{
+    # Relative payload: resolves against this layer's directory.
+    def "RobotA" (prepend payload = @parts/robot.usda@</Part>)
+    {
+        double3 xformOp:translate = (-1, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Absolute payload baked in on another machine: only the file-name fallback can
+    # satisfy this one.
+    def "RobotB" (prepend payload = @/Users/someone/Desktop/robot.usda@</Part>)
+    {
+        double3 xformOp:translate = (1, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

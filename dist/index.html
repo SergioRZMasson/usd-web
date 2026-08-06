@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>usd-web-gltf — USD in Babylon.js</title>
+<style>
+    :root {
+        --bg: #16161a;
+        --panel: #1e1e24;
+        --border: #2e2e37;
+        --text: #e6e6ea;
+        --muted: #9a9aa8;
+        --accent: #5b9cf8;
+        --warn: #e0b050;
+        --error: #f06868;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: var(--bg); color: var(--text);
+        font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+
+    #app { display: grid; grid-template-columns: 1fr 320px; height: 100%; }
+
+    #viewport { position: relative; }
+    canvas { width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
+
+    #sidebar {
+        display: flex; flex-direction: column; min-height: 0;
+        background: var(--panel); border-left: 1px solid var(--border);
+    }
+
+    .section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .section h2 {
+        margin: 0 0 10px; font-size: 11px; font-weight: 600;
+        letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+    }
+
+    h1 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+    .subtitle { color: var(--muted); font-size: 12px; }
+
+    input[type=file] { width: 100%; font: inherit; color: var(--muted); }
+    input[type=file]::file-selector-button {
+        margin-right: 10px; padding: 6px 12px; border: 0; border-radius: 6px;
+        background: var(--accent); color: #0b0b0f; font: inherit; font-weight: 600; cursor: pointer;
+    }
+    input[type=file]:disabled::file-selector-button { background: #444; cursor: not-allowed; }
+
+    .field { display: block; margin-bottom: 10px; }
+    .field > span { display: block; margin-bottom: 4px; font-size: 12px; color: var(--muted); }
+    .field em { font-style: normal; opacity: .7; }
+    .hint { margin: 8px 0 0; font-size: 11px; line-height: 1.45; color: var(--muted); opacity: .8; }
+
+    #samples { display: flex; flex-wrap: wrap; gap: 6px; }
+    #samples button {
+        padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px;
+        background: #26262e; color: var(--text); font: inherit; cursor: pointer;
+    }
+    #samples button:hover { border-color: var(--accent); color: var(--accent); }
+
+    #status {
+        padding: 10px 16px; border-bottom: 1px solid var(--border);
+        color: var(--muted); font-size: 12px;
+    }
+    #status.busy::after {
+        content: ''; display: inline-block; width: 8px; height: 8px; margin-left: 8px;
+        border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%;
+        animation: spin .7s linear infinite; vertical-align: -1px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #stats { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; font-size: 12px; }
+    #stats dt { color: var(--muted); }
+    #stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+    #logSection { flex: 1; min-height: 0; display: flex; flex-direction: column; border-bottom: 0; }
+    #log {
+        flex: 1; min-height: 0; overflow: auto;
+        font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11px;
+    }
+    #log .line { padding: 2px 0; border-bottom: 1px solid #24242c; word-break: break-word; }
+    #log .warning { color: var(--warn); }
+    #log .error { color: var(--error); }
+
+    #drop {
+        position: absolute; inset: 0; display: none;
+        place-items: center; background: rgba(91, 156, 248, .12);
+        border: 2px dashed var(--accent); font-size: 15px; color: var(--accent);
+    }
+    #drop.active { display: grid; }
+
+    @media (max-width: 860px) {
+        #app { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+        #sidebar { border-left: 0; border-top: 1px solid var(--border); max-height: 45vh; }
+    }
+</style>
+</head>
+<body>
+
+<div id="app">
+    <div id="viewport">
+        <canvas id="canvas"></canvas>
+        <div id="drop">Drop a USD file to convert</div>
+    </div>
+
+    <aside id="sidebar">
+        <div class="section">
+            <h1>usd-web-gltf</h1>
+            <div class="subtitle">OpenUSD + Adobe usdGltf, in WebAssembly. Rendered with Babylon.js 9.19.1.</div>
+        </div>
+
+        <div id="status">Starting…</div>
+
+        <div class="section">
+            <h2>Open</h2>
+            <label class="field">
+                <span>Single file or multi-select</span>
+                <input type="file" id="file" accept=".usd,.usda,.usdc,.usdz" multiple disabled />
+            </label>
+            <label class="field">
+                <span>Whole folder <em>(keeps relative references working)</em></span>
+                <input type="file" id="folder" webkitdirectory directory disabled />
+            </label>
+            <p class="hint">
+                Multi-file USD scenes reference siblings by relative path. Pick the folder,
+                or drag it onto the window, so those files come along.
+            </p>
+        </div>
+
+        <div class="section">
+            <h2>Samples</h2>
+            <div id="samples">
+                <button data-sample="cube.usda">Cube + plane</button>
+                <button data-sample="hierarchy.usda">Hierarchy</button>
+                <button data-sample="materials.usda">Materials</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Stats</h2>
+            <dl id="stats"></dl>
+        </div>
+
+        <div class="section" id="logSection">
+            <h2>Log</h2>
+            <div id="log"></div>
+        </div>
+    </aside>
+</div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

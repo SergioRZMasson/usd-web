@@ -1,0 +1,28 @@
+# Native build output
+build/
+build-st/
+
+# Dependencies
+node_modules/
+
+# npm package build output (regenerated from the native build)
+js/dist/
+
+# Loose native artifacts
+*.o
+*.a
+
+# Test output
+test/*.glb
+demo/babylon-loader-test/public/
+.playwright-cli/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# NOTE: dist/ is intentionally NOT ignored. It holds the built demo and the WebAssembly
+# artifacts, and is published by GitHub Pages so partners can try the converter without
+# building anything.

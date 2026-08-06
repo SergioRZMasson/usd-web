@@ -1,0 +1,19 @@
+{
+    "Plugins": [
+        {
+            "Info": {
+                "Types": {
+                    "WebResolver": {
+                        "bases": [ "ArDefaultResolver" ],
+                        "implementsContexts": false
+                    }
+                }
+            },
+            "LibraryPath": "",
+            "Name": "usdWebResolver",
+            "ResourcePath": "resources",
+            "Root": "..",
+            "Type": "library"
+        }
+    ]
+}

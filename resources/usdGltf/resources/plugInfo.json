@@ -1,0 +1,41 @@
+{
+    "Plugins": [
+        {
+            "Info": {
+                "SdfMetadata": {
+                    "gltfAssetsPath": {
+                        "appliesTo": [ "prims" ],
+                        "displayGroup": "Core",
+                        "documentation:": "Path to store assets to, instead of resolving from the source file",
+                        "type": "string"
+                    },
+                    "gltfAnimationTracks": {
+                        "appliesTo": [ "prims" ],
+                        "displayGroup": "Core",
+                        "documentation:": "Whether to import multiple animation tracks (by default only the first track is imported)",
+                        "type": "bool"
+                    }
+                },
+                "Types": {
+                    "UsdGltfFileFormat": {
+                        "bases": ["SdfFileFormat"],
+                        "displayName": "Khronos Group® glTF™",
+                        "extensions": [ "gltf", "glb" ],
+                        "formatId": "gltf",
+                        "primary": true,
+                        "target": "usd"
+                    },
+                    "adobe::usd::GltfResolver" : {
+                        "bases": [ "ArPackageResolver" ],
+                        "extensions": [ "gltf", "glb", "GLTF", "GLB", "glTF" ]
+                    }
+                }
+            },
+            "LibraryPath": "",
+            "Name": "usdGltf_plugin",
+            "ResourcePath": "resources",
+            "Root": "..",
+            "Type": "library"
+        }
+    ]
+}

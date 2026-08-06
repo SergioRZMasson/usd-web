@@ -1,0 +1,66 @@
+{
+  "name": "usd-web-gltf",
+  "version": "0.1.0",
+  "description": "OpenUSD + Adobe's usdGltf plugin compiled to WebAssembly. Converts USD/USDZ to glTF/GLB in the browser for rendering with Babylon.js, three.js or any glTF viewer.",
+  "keywords": [
+    "usd",
+    "usdz",
+    "openusd",
+    "gltf",
+    "glb",
+    "webassembly",
+    "wasm",
+    "babylonjs",
+    "three",
+    "3d"
+  ],
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./babylon": {
+      "types": "./dist/babylon.d.ts",
+      "import": "./dist/babylon.js",
+      "require": "./dist/babylon.cjs"
+    },
+    "./wasm": {
+      "default": "./dist/wasm/usd-web-gltf.wasm"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "clean": "rimraf dist",
+    "build": "npm run clean && npm run build:types && npm run build:bundle && npm run copy:wasm",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build:bundle": "node scripts/build.mjs",
+    "copy:wasm": "node scripts/copy-wasm.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "size": "node scripts/report-size.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.24.2",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

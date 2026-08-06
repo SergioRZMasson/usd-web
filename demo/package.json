@@ -1,0 +1,21 @@
+{
+  "name": "usd-web-gltf-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser demo: drop a USD file in, see it rendered in Babylon.js.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && node scripts/serve.mjs",
+    "serve": "node scripts/serve.mjs",
+    "dev": "node scripts/build.mjs --watch"
+  },
+  "dependencies": {
+    "@babylonjs/core": "9.19.1",
+    "@babylonjs/loaders": "9.19.1",
+    "usd-web-gltf": "file:../js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2"
+  }
+}

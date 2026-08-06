@@ -1,0 +1,113 @@
+/**
+ * Type definitions for the usd-web-gltf converter.
+ */
+
+/** Binary input accepted by the converter. */
+export type BinaryInput = ArrayBuffer | ArrayBufferView | Uint8Array;
+
+/** Sidecar assets keyed by the path referenced from the USD layer. */
+export type VirtualFiles = Record<string, BinaryInput>;
+
+/** Severity of a diagnostic emitted by OpenUSD. */
+export type LogLevel = 'info' | 'warning' | 'error';
+
+/** A diagnostic emitted while converting. */
+export interface LogMessage {
+    level: LogLevel;
+    message: string;
+}
+
+/** Output container format. */
+export type OutputFormat = 'glb' | 'gltf';
+
+/** Options for instantiating the WebAssembly module. */
+export interface CreateConverterOptions {
+    /**
+     * Explicit URL of `usd-web-gltf.wasm`. When omitted the file is resolved relative to
+     * the glue script, which is correct for most bundler setups.
+     */
+    wasmUrl?: string | URL;
+
+    /**
+     * Overrides Emscripten's asset resolution. Takes precedence over {@link wasmUrl}.
+     * Both the `.wasm` binary and the `.data` resource bundle are routed through this.
+     */
+    locateFile?: (path: string, scriptDirectory: string) => string;
+
+    /** Pre-fetched WebAssembly binary, skipping the network request. */
+    wasmBinary?: ArrayBuffer | Uint8Array;
+
+    /** Receives diagnostics emitted by OpenUSD. */
+    onLog?: (message: LogMessage) => void;
+}
+
+/** Options for a single conversion. */
+export interface ConvertOptions {
+    /**
+     * Name of the primary file including extension. The extension selects the importer,
+     * so it must be `.usd`, `.usda`, `.usdc` or `.usdz`. Defaults to `"input.usdz"`.
+     */
+    fileName?: string;
+
+    /**
+     * Additional assets (textures, referenced layers) made visible to USD's asset
+     * resolver, keyed by the path used inside the USD layer.
+     *
+     * Preserve the original directory structure relative to the root layer — that is what
+     * lets relative references such as `@sub/robot.usda@` resolve. Unnecessary for
+     * self-contained `.usdz` archives.
+     */
+    additionalFiles?: VirtualFiles;
+
+    /**
+     * Resolve references that cannot be found by matching on file name. Defaults to
+     * `true`.
+     *
+     * USD files exported from DCC tools frequently carry absolute paths from the machine
+     * they were authored on (`@/Users/someone/Desktop/robot.usd@`). Those can never
+     * resolve as written, so any supplied file with a matching name is used instead. Set
+     * to `false` to require exact resolution.
+     */
+    resolveByFileName?: boolean;
+
+    /** Output container. Defaults to `"glb"`. */
+    format?: OutputFormat;
+
+    /** Diagnostics for this conversion only. */
+    onLog?: (message: LogMessage) => void;
+}
+
+/** Result of a successful conversion. */
+export interface ConvertResult {
+    /** The encoded glTF/GLB payload. */
+    data: Uint8Array;
+
+    /** Suggested output file name, derived from the input name. */
+    fileName: string;
+
+    /** Duration of the native conversion, in milliseconds. */
+    durationMs: number;
+
+    /** Diagnostics emitted during this conversion. */
+    log: LogMessage[];
+
+    /**
+     * File names the asset referenced but that were never supplied.
+     *
+     * The conversion still succeeds — USD drops the unresolvable payload — so this is the
+     * signal that content is missing from the output.
+     */
+    missingAssets: string[];
+}
+
+/** Details about the loaded native module. */
+export interface ConverterInfo {
+    /** OpenUSD version the module was built from, e.g. `"0.26.8"`. */
+    usdVersion: string;
+    /** Extensions USD can write, as registered by the linked file format plugins. */
+    supportedOutputFormats: readonly string[];
+    /** Whether Adobe's glTF file format plugin registered successfully. */
+    gltfPluginAvailable: boolean;
+    /** Asset resolver in use — `"WebResolver"` when name-fallback is available. */
+    resolver: string;
+}
