@@ -13,6 +13,11 @@ const glb = await usdToGlb(await file.arrayBuffer(), { fileName: file.name });
 **[▶ Live demo](https://sergiorzmasson.github.io/usd-web/)** — drop in a USD file and see
 it rendered.
 
+> **Working on this project?** [`HANDOFF.md`](./HANDOFF.md) is the engineering context: why each
+> decision was made, the traps we hit, what was measured and what is still open.
+> [`USD-TO-GLTF-TRANSLATION.md`](./USD-TO-GLTF-TRANSLATION.md) analyses exactly which USD features
+> survive the conversion.
+
 ![Five UsdPreviewSurface materials converted to KHR_materials_* and rendered in Babylon.js](demo/screenshots/sample-materials.png)
 
 ---
