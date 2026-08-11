@@ -1,7 +1,7 @@
 // Verifies that Adobe's usdGltf file format plugin registers inside WebAssembly and that
 // a USD stage can be exported to GLB through USD's own SdfFileFormat dispatch.
 
-import createUsdGltfModule from '../build/bin/usd-web-gltf.js';
+import createUsdGltfModule from '../build/wasm/bin/usd-web-gltf.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';

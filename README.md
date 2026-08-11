@@ -53,14 +53,14 @@ They are linked *statically* rather than loaded at runtime, and three things mus
 Verified at runtime:
 
 ```
-OpenUSD version : 0.26.8
+OpenUSD version : 0.26.5
 Output formats  : glb,gltf,usd,usda,usdc,usdz
 glTF plugin     : REGISTERED
 ```
 
 ## Size
 
-Release build, OpenUSD 26.08, no imaging, no Python, single-threaded:
+Release build, OpenUSD 26.05, no imaging, no Python, single-threaded:
 
 | Artifact | Raw | gzip | brotli |
 |---|---:|---:|---:|
@@ -98,25 +98,46 @@ main thread must stay responsive.
 
 ### Requirements
 
-- **Emscripten 6.x** (`emcc`) — [installation](https://emscripten.org/docs/getting_started/downloads.html)
-- **CMake 3.24+**, **Ninja**, **Git**, **Node 18+**
-- A checkout of [adobe/USD-Fileformat-plugins](https://github.com/adobe/USD-Fileformat-plugins)
+- **Emscripten** (`emcc`) — [installation](https://emscripten.org/docs/getting_started/downloads.html).
+  Put it on `PATH`, or set `EMSDK` / `EMSCRIPTEN_ROOT`.
+- **[vcpkg](https://github.com/microsoft/vcpkg)** with `VCPKG_ROOT` exported. It compiles
+  OpenUSD; nothing else about it needs configuring.
+- **CMake 3.24+**, **Ninja**, **Git**, **Node 18+**.
+
+Everything else — OpenUSD, Adobe's plugins and tinygltf — is fetched by the build itself, so
+no paths have to be pointed at anything on your machine.
 
 ### One command
 
+Clone with submodules (or initialise them afterwards), then run the build:
+
 ```powershell
-./scripts/build.ps1 -AdobePluginsDir E:/Github/USD-Fileformat-plugins
+git clone --recurse-submodules https://github.com/SergioRZMasson/usd-web
+# or, in an existing checkout:
+git submodule update --init --recursive
+
+./scripts/build.ps1
 ```
 
-This fetches and builds every dependency in order, skipping any step whose output already
-exists:
+`build.ps1` is a thin wrapper around the CMake `wasm` preset. You can also drive the preset
+directly:
 
-1. **oneTBB** → static wasm library (required by OpenUSD)
-2. **OpenUSD 26.08** → monolithic static wasm library, no imaging, no Python
-3. **tinygltf** → header-only, pinned to the version Adobe's plugin expects
-4. **this project** → the wasm module and its resource bundle
+```powershell
+cmake --workflow --preset wasm
+# equivalently: cmake --preset wasm  &&  cmake --build --preset wasm
+```
 
-A cold build takes roughly **30–60 minutes**, nearly all of it OpenUSD.
+Either way the build:
+
+1. **vcpkg → OpenUSD** — compiled as a static, monolithic wasm library (no imaging, no
+   Python) by the overlay port in [`ports/usd`](ports/usd), against a single-threaded
+   oneTBB and zlib that vcpkg also builds for wasm.
+2. **submodules → Adobe's plugins + tinygltf** — compiled in place from
+   [`dependencies/`](dependencies).
+3. **this project** — the wasm module and its resource bundle.
+
+A cold build takes roughly **30–60 minutes**, nearly all of it OpenUSD. vcpkg caches the
+result, so later builds are fast. Artifacts land in `build/wasm/bin`.
 
 Then the npm package and the demo:
 
@@ -125,16 +146,26 @@ cd js;   npm install; npm run build
 cd ../demo; npm install; npm run build   # writes ../docs
 ```
 
-### Pinned versions, and why
+### How the dependencies are wired
 
-| Dependency | Version | Reason |
+| Piece | Where it comes from | How it is pinned |
 |---|---|---|
-| OpenUSD | **26.08** | First release that builds `pxr/usd` for Emscripten. 25.11 and earlier wrap `add_subdirectory(usd)` in `if (NOT EMSCRIPTEN)`, yielding only `pxr/base` — enough to link, not enough to open a stage. |
-| tinygltf | **2.8.21** | Matches the `WriteImageDataFunction` signature Adobe's `gltf.cpp` uses. 2.9.x inserted an `FsCallbacks` parameter and fails to compile. |
-| oneTBB | 2022.2.0 | Required by OpenUSD; builds for wasm out of the box. |
+| **OpenUSD** | vcpkg overlay port ([`ports/usd`](ports/usd)) | vcpkg baseline in [`vcpkg.json`](vcpkg.json) (currently **26.05**) |
+| **oneTBB, zlib** | vcpkg | same baseline |
+| **Adobe USD-Fileformat-plugins** | git submodule | commit recorded in the superproject |
+| **tinygltf** | git submodule | **v2.8.21** — 2.9.x changed `WriteImageDataFunction` and fails to compile |
 
-> **vcpkg's `usd` port cannot be used.** Its portfile declares
-> `vcpkg_check_linkage(ONLY_DYNAMIC_LIBRARY)`, and wasm requires `BUILD_SHARED_LIBS=OFF`.
+**OpenUSD must be ≥ 26.05.** In 25.11 and earlier, `pxr/CMakeLists.txt` wraps
+`add_subdirectory(usd)` in `if (NOT EMSCRIPTEN)`, so an Emscripten build yields only
+`pxr/base` — enough to link, not enough to open a stage. 26.05 dropped that guard and ships
+the `pxr_plugin`-as-static-library routing the plugin registration relies on.
+
+> **The stock vcpkg `usd` port can't be used as-is** — it declares
+> `vcpkg_check_linkage(ONLY_DYNAMIC_LIBRARY)`, and wasm requires a static build. The overlay
+> in [`ports/usd`](ports/usd) shadows it: it removes that restriction and adds
+> `PXR_BUILD_MONOLITHIC=ON`, inheriting the stock port's source revision and patch set
+> unchanged. A companion overlay ([`ports/tbb`](ports/tbb)) builds oneTBB single-threaded
+> (`EMSCRIPTEN_WITHOUT_PTHREAD`) so the module needs no cross-origin isolation.
 
 ### What had to be replaced, and why
 
@@ -196,7 +227,7 @@ import { UsdConverter } from "usd-web-gltf";
 
 const converter = await UsdConverter.create();
 console.log(converter.info);
-// { usdVersion: "0.26.8", supportedOutputFormats: [...],
+// { usdVersion: "0.26.5", supportedOutputFormats: [...],
 //   gltfPluginAvailable: true, resolver: "WebResolver" }
 
 for (const asset of assets) {
@@ -377,9 +408,15 @@ project as the reference for the material translation.
 ## Repository layout
 
 ```
+CMakeLists.txt          the wasm build (find_package(pxr) from vcpkg + the submodules)
+CMakePresets.json       the `wasm` configure/build/workflow preset
+vcpkg.json              manifest: depends on usd; pins the vcpkg baseline
+ports/                  vcpkg overlay ports (static monolithic usd; single-threaded tbb)
+triplets/               vcpkg overlay triplet: wasm32-emscripten, release, no pthreads
+dependencies/           git submodules: USD-Fileformat-plugins, tinygltf
 src/                    C++ — Emscripten bindings, stb image backend, WebResolver
 resources/              plugInfo.json manifests for the statically-linked plugins
-scripts/build.ps1       builds oneTBB, OpenUSD, tinygltf and this project
+scripts/build.ps1       submodule init + Ninja shim + the `wasm` preset
 js/                     the npm package (TypeScript)
 demo/                   browser demo source; `npm run build` writes ../docs
 demo/babylon-loader-test/   integration test for the Babylon.js USD loader

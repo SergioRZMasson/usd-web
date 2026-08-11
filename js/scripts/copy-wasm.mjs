@@ -13,10 +13,9 @@ import { dirname, resolve } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 
-// The single-threaded build is shipped by default: it needs no COOP/COEP headers, which
-// makes it deployable anywhere. Point USD_WEB_GLTF_BIN at ../build/bin for the pthreads
-// build if you need it.
-const sourceDir = process.env.USD_WEB_GLTF_BIN ?? resolve(root, "../build-st/bin");
+// The wasm module is built by the `wasm` CMake preset into ../build/wasm/bin. Override with
+// USD_WEB_GLTF_BIN to copy from a different build directory.
+const sourceDir = process.env.USD_WEB_GLTF_BIN ?? resolve(root, "../build/wasm/bin");
 const targetDir = resolve(root, 'dist/wasm');
 
 const artifacts = ['usd-web-gltf.js', 'usd-web-gltf.wasm', 'usd-web-gltf.data'];

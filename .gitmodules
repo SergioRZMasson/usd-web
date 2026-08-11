@@ -1,0 +1,6 @@
+[submodule "dependencies/tinygltf"]
+	path = dependencies/tinygltf
+	url = https://github.com/syoyo/tinygltf.git
+[submodule "dependencies/USD-Fileformat-plugins"]
+	path = dependencies/USD-Fileformat-plugins
+	url = https://github.com/adobe/USD-Fileformat-plugins.git

@@ -6,9 +6,17 @@ cmake_minimum_required(VERSION 3.24)
 # to WebAssembly and exposes a single JavaScript entry point that turns a USD asset into a
 # GLB buffer.
 #
-# The Adobe sources are compiled *in place* from their own checkout: nothing is forked or
-# vendored, so tracking upstream is a matter of moving the checkout forward. Only two things
-# are supplied locally:
+# Dependencies are handled entirely by the build, so nothing has to be configured on the
+# machine beyond an Emscripten install and a vcpkg checkout (VCPKG_ROOT):
+#
+#   * OpenUSD is compiled by vcpkg as a STATIC, MONOLITHIC library for the
+#     wasm32-emscripten triplet. The overlay port under ports/usd and the overlay triplet
+#     under triplets/ carry the wasm-specific settings the stock vcpkg port refuses to make.
+#   * Adobe's USD-Fileformat-plugins and syoyo/tinygltf are git submodules under
+#     dependencies/, compiled in place. Nothing is forked or vendored, so tracking upstream
+#     is a matter of moving a submodule forward.
+#
+# Only two things are supplied locally on top of the Adobe sources:
 #
 #   1. Build rules that produce STATIC libraries. Upstream builds `fileformatUtils` and
 #      `usdGltf` as SHARED, which Emscripten cannot link.
@@ -17,11 +25,27 @@ cmake_minimum_required(VERSION 3.24)
 #
 # Everything else — the whole USD -> glTF translation — is upstream code, unmodified.
 
+# The CMake presets already point CMAKE_TOOLCHAIN_FILE at vcpkg (which in turn chainloads
+# the Emscripten toolchain for the wasm32-emscripten triplet). This fallback keeps a bare
+# `cmake -B build` working when VCPKG_ROOT is exported, but configuring through a preset is
+# the supported path — see CMakePresets.json.
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    if(DEFINED ENV{VCPKG_ROOT})
+        set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+            CACHE STRING "Vcpkg toolchain file")
+    else()
+        message(FATAL_ERROR
+            "VCPKG_ROOT is not set and no CMAKE_TOOLCHAIN_FILE was provided.\n"
+            "Configure with the `wasm` preset (see CMakePresets.json), or export VCPKG_ROOT.")
+    endif()
+endif()
+
 project(usd_web_gltf LANGUAGES CXX)
 
 if(NOT EMSCRIPTEN)
     message(FATAL_ERROR
-        "This project only targets WebAssembly. Configure with `emcmake cmake ...`.")
+        "This project only targets WebAssembly. Configure with the `wasm` preset, which "
+        "selects the wasm32-emscripten triplet so vcpkg chainloads the Emscripten toolchain.")
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -33,21 +57,45 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # Inputs
 # ---------------------------------------------------------------------------
 
-set(ADOBE_PLUGINS_DIR "" CACHE PATH
+# The Adobe plugins and tinygltf are git submodules under dependencies/. The paths stay
+# overridable for out-of-tree checkouts, but default to the submodules so a fresh clone
+# (with `--recurse-submodules`) needs no configuration.
+set(ADOBE_PLUGINS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/USD-Fileformat-plugins" CACHE PATH
     "Checkout of adobe/USD-Fileformat-plugins")
-set(TINYGLTF_DIR "" CACHE PATH
+set(TINYGLTF_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/tinygltf" CACHE PATH
     "Checkout of syoyo/tinygltf (header-only)")
 
-if(NOT ADOBE_PLUGINS_DIR OR NOT EXISTS "${ADOBE_PLUGINS_DIR}/utils/src/layerRead.cpp")
+if(NOT EXISTS "${ADOBE_PLUGINS_DIR}/utils/src/layerRead.cpp")
     message(FATAL_ERROR
-        "ADOBE_PLUGINS_DIR must point at a USD-Fileformat-plugins checkout. Got: '${ADOBE_PLUGINS_DIR}'")
+        "USD-Fileformat-plugins not found under '${ADOBE_PLUGINS_DIR}'.\n"
+        "Initialise the submodules: git submodule update --init --recursive")
 endif()
-if(NOT TINYGLTF_DIR OR NOT EXISTS "${TINYGLTF_DIR}/tiny_gltf.h")
+if(NOT EXISTS "${TINYGLTF_DIR}/tiny_gltf.h")
     message(FATAL_ERROR
-        "TINYGLTF_DIR must point at a tinygltf checkout containing tiny_gltf.h. Got: '${TINYGLTF_DIR}'")
+        "tinygltf not found under '${TINYGLTF_DIR}'.\n"
+        "Initialise the submodules: git submodule update --init --recursive")
 endif()
 
-find_package(pxr REQUIRED)
+# OpenUSD is provided by the vcpkg overlay port as a static monolithic build (libusd_m.a).
+find_package(pxr CONFIG REQUIRED)
+
+# zlib is a vcpkg dependency of USD, and Adobe's fileformatUtils (neuralAssetsHelper.cpp)
+# also calls inflate/deflate directly. In a from-source USD install the monolithic archive
+# does not re-export zlib, so the final module must link it explicitly. (The previous
+# hand-rolled build pulled Emscripten's own `--use-port=zlib` instead; vcpkg builds it.)
+find_package(ZLIB REQUIRED)
+
+# find_package(pxr) sets PXR_CMAKE_DIR to the directory that holds pxrConfig.cmake, which
+# vcpkg installs at <prefix>/share/pxr. The monolithic archive and the plugin resources
+# (plugInfo.json manifests + schemas) live under <prefix>/lib, so derive that root here
+# rather than assuming a layout relative to PXR_CMAKE_DIR.
+get_filename_component(PXR_INSTALL_PREFIX "${PXR_CMAKE_DIR}/../.." ABSOLUTE)
+set(PXR_USD_PLUGIN_RESOURCES "${PXR_INSTALL_PREFIX}/lib/usd")
+if(NOT EXISTS "${PXR_USD_PLUGIN_RESOURCES}")
+    message(FATAL_ERROR
+        "Expected USD plugin resources at '${PXR_USD_PLUGIN_RESOURCES}' but none were found. "
+        "Was OpenUSD built with PXR_BUILD_MONOLITHIC by the overlay port?")
+endif()
 
 # USD's exported targets attach one --embed-file link option per resource file. With the
 # full schema set that produces a link command well past Windows' 32 KiB command line
@@ -129,6 +177,8 @@ target_link_libraries(fileformatUtils PUBLIC
     # options for their plugInfo/schema resources, so both are required.
     usd_m
     tf sdf usd usdGeom usdLux usdRender usdSkel usdShade usdUtils usdVol arch
+    # neuralAssetsHelper.cpp uses zlib directly; PUBLIC so the symbols reach the final link.
+    ZLIB::ZLIB
 )
 
 # ---------------------------------------------------------------------------
@@ -193,7 +243,7 @@ target_link_libraries(usd-web-gltf PRIVATE usdGltf fileformatUtils)
 # This mirrors what USD's own pxr_library macro does for Emscripten targets.
 target_link_options(usd-web-gltf PRIVATE
     "SHELL:-Wl,--whole-archive $<TARGET_FILE:usdGltf> -Wl,--no-whole-archive"
-    "SHELL:-Wl,--whole-archive ${PXR_CMAKE_DIR}/lib/libusd_m.a -Wl,--no-whole-archive"
+    "SHELL:-Wl,--whole-archive $<TARGET_FILE:usd_m> -Wl,--no-whole-archive"
 )
 
 set(_plugin_resources "${CMAKE_CURRENT_SOURCE_DIR}/resources/usdGltf")
@@ -204,7 +254,7 @@ set(_resource_stage "${CMAKE_BINARY_DIR}/usd-resources")
 # virtual filesystem. Staging the core resources alongside the Adobe plugin's manifest and
 # our resolver's reproduces the layout USD expects from a normal install.
 file(REMOVE_RECURSE "${_resource_stage}")
-file(COPY "${PXR_CMAKE_DIR}/lib/usd/" DESTINATION "${_resource_stage}")
+file(COPY "${PXR_USD_PLUGIN_RESOURCES}/" DESTINATION "${_resource_stage}")
 file(COPY "${_plugin_resources}" DESTINATION "${_resource_stage}")
 file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/resources/usdWebResolver" DESTINATION "${_resource_stage}")
 

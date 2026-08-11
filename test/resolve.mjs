@@ -2,7 +2,7 @@
 // resolve when sibling files are supplied, and that an absolute path baked in on another
 // machine is recovered by the file-name fallback.
 
-import createUsdGltfModule from '../build/bin/usd-web-gltf.js';
+import createUsdGltfModule from '../build/wasm/bin/usd-web-gltf.js';
 
 const Module = await createUsdGltfModule();
 

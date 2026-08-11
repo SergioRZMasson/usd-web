@@ -1,6 +1,10 @@
-# Native build output (build/ = pthreads, build-st/ = single-threaded, plus experiments)
+# Native build output. The `wasm` CMake preset writes to build/wasm; vcpkg installs its
+# compiled dependencies (OpenUSD, tbb, zlib) under build/vcpkg_installed.
 build/
 build-*/
+
+# vcpkg manifest install tree (if one is ever produced outside build/)
+vcpkg_installed/
 
 # Dependencies
 node_modules/
