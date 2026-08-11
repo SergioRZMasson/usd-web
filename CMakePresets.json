@@ -1,0 +1,52 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "wasm",
+      "displayName": "WebAssembly (Emscripten, Release)",
+      "description": "Static monolithic OpenUSD via vcpkg + Adobe's usdGltf plugin, compiled to wasm. Requires VCPKG_ROOT and Emscripten (emcc on PATH or EMSDK set).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/wasm",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_TARGET_TRIPLET": "wasm32-emscripten",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/toolchains/emscripten.cmake",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/ports",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
+        "VCPKG_MANIFEST_INSTALL": "ON"
+      },
+      "environment": {
+        "VCPKG_FEATURE_FLAGS": "manifests,versions"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "wasm",
+      "displayName": "WebAssembly (Release)",
+      "configurePreset": "wasm"
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "wasm",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "wasm"
+        },
+        {
+          "type": "build",
+          "name": "wasm"
+        }
+      ]
+    }
+  ]
+}
