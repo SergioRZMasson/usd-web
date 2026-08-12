@@ -146,6 +146,23 @@ cd js;   npm install; npm run build
 cd ../demo; npm install; npm run build   # writes ../docs
 ```
 
+### Build the npm library in the same step
+
+The `js/` package build (types + webpack bundle + copying the wasm artifacts) can be driven
+by CMake instead, so a single command produces both the wasm module and the publishable
+library. Enable it with `-DBUILD_JS_LIBRARY=ON`, or use the `wasm-js` preset:
+
+```powershell
+cmake --workflow --preset wasm-js
+# equivalently: cmake --preset wasm-js  &&  cmake --build --preset wasm-js
+```
+
+This builds into `build/wasm-js/`, then runs `npm install` (only when `package.json` /
+`package-lock.json` change) and `npm run build` in `js/`, pointed at the freshly built wasm.
+The result is a ready-to-publish `js/dist`. It needs **Node/npm** on `PATH` on top of the
+`wasm` preset's prerequisites. The flag is `OFF` by default, so the plain `wasm` preset stays
+wasm-only for fast iteration.
+
 ### How the dependencies are wired
 
 | Piece | Where it comes from | How it is pinned |

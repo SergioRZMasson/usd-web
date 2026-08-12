@@ -25,6 +25,16 @@
       "environment": {
         "VCPKG_FEATURE_FLAGS": "manifests,versions"
       }
+    },
+    {
+      "name": "wasm-js",
+      "displayName": "WebAssembly + JS library (Emscripten, Release)",
+      "description": "Everything in one command: builds the wasm module, then the usd-web-gltf npm library (js/) with webpack. Requires Node/npm in addition to the `wasm` preset's prerequisites.",
+      "inherits": "wasm",
+      "binaryDir": "${sourceDir}/build/wasm-js",
+      "cacheVariables": {
+        "BUILD_JS_LIBRARY": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -32,6 +42,11 @@
       "name": "wasm",
       "displayName": "WebAssembly (Release)",
       "configurePreset": "wasm"
+    },
+    {
+      "name": "wasm-js",
+      "displayName": "WebAssembly + JS library (Release)",
+      "configurePreset": "wasm-js"
     }
   ],
   "workflowPresets": [
@@ -45,6 +60,19 @@
         {
           "type": "build",
           "name": "wasm"
+        }
+      ]
+    },
+    {
+      "name": "wasm-js",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "wasm-js"
+        },
+        {
+          "type": "build",
+          "name": "wasm-js"
         }
       ]
     }

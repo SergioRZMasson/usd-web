@@ -99,7 +99,7 @@ index.html          the page
 assets/             sample .usda files, including a multi-file scene
 screenshots/        images used by the READMEs
 src/main.js         the app: converter + Babylon scene
-scripts/build.mjs   bundles with esbuild, stages wasm + assets into ../docs
+webpack.config.mjs  bundles with webpack, stages wasm + assets into ../docs
 scripts/serve.mjs   static server for ../docs
 ```
 

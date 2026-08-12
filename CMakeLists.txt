@@ -53,6 +53,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# When ON, the npm package under js/ is built as part of the CMake build: after the wasm
+# module links, its artifacts are bundled into the publishable library with webpack. This
+# lets a single `cmake --build` produce everything. Enabled by the `wasm-js` preset; OFF by
+# default so iterating on the wasm alone does not pay the npm cost.
+option(BUILD_JS_LIBRARY "Build the usd-web-gltf npm library (js/) after the wasm module" OFF)
+
 # ---------------------------------------------------------------------------
 # Inputs
 # ---------------------------------------------------------------------------
@@ -280,3 +286,51 @@ set_target_properties(usd-web-gltf PROPERTIES
     SUFFIX ".js"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# ---------------------------------------------------------------------------
+# JavaScript library (optional) — the npm package under js/
+# ---------------------------------------------------------------------------
+#
+# With -DBUILD_JS_LIBRARY=ON (the `wasm-js` preset), the npm package is built as part of the
+# CMake build so one command produces both the wasm module and the publishable library.
+#
+# The webpack build (npm run build) copies the Emscripten artifacts out of this target's
+# output directory into js/dist/wasm and bundles the TypeScript. The directory is passed
+# through USD_WEB_GLTF_BIN — which js/webpack.config.mjs already honours — so the js build
+# tracks the wasm output wherever it lands rather than assuming a fixed layout.
+if(BUILD_JS_LIBRARY)
+    find_program(NPM_EXECUTABLE NAMES npm.cmd npm REQUIRED)
+
+    set(_js_dir "${CMAKE_CURRENT_SOURCE_DIR}/js")
+    set(_js_install_stamp "${CMAKE_CURRENT_BINARY_DIR}/js-npm-install.stamp")
+
+    # Install dependencies only when the manifest changes; the stamp lives in the build tree
+    # so a fresh build directory always installs first.
+    add_custom_command(
+        OUTPUT "${_js_install_stamp}"
+        COMMAND "${NPM_EXECUTABLE}" install
+        COMMAND "${CMAKE_COMMAND}" -E touch "${_js_install_stamp}"
+        WORKING_DIRECTORY "${_js_dir}"
+        DEPENDS "${_js_dir}/package.json" "${_js_dir}/package-lock.json"
+        COMMENT "usd-web-gltf (js): installing npm dependencies"
+        USES_TERMINAL
+        VERBATIM
+    )
+
+    # `npm run build` runs tsc (types) then webpack (bundle + wasm copy). Kept as an ALL
+    # target so it always re-bundles against the current wasm, and made to depend on the
+    # wasm target so the artifacts exist first.
+    add_custom_target(js-library ALL
+        COMMAND "${CMAKE_COMMAND}" -E env
+                "USD_WEB_GLTF_BIN=$<TARGET_FILE_DIR:usd-web-gltf>"
+                "${NPM_EXECUTABLE}" run build
+        WORKING_DIRECTORY "${_js_dir}"
+        DEPENDS "${_js_install_stamp}"
+        COMMENT "usd-web-gltf (js): building the npm library with webpack"
+        USES_TERMINAL
+        VERBATIM
+    )
+    add_dependencies(js-library usd-web-gltf)
+
+    message(STATUS "BUILD_JS_LIBRARY=ON — the npm library will be built after the wasm module")
+endif()

@@ -22,7 +22,7 @@ npm run build
 
 # 3. Bundle and serve this test
 cd E:\Github\usd-web\demo\babylon-loader-test
-node scripts/build.mjs
+npx webpack --config ./webpack.config.mjs
 cd ..;  $env:PORT="8082"; $env:ROOT="$PWD\babylon-loader-test\public"; node scripts/serve.mjs
 ```
 
