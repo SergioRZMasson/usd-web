@@ -32,6 +32,14 @@ export interface UsdGltfModule {
     /** Converts a file already present in the virtual filesystem. */
     convert(inputPath: string, outputPath: string): NativeConvertResult;
 
+    /** Converts a file with explicit runtime geometry optimization settings. */
+    convertWithOptions(
+        inputPath: string,
+        outputPath: string,
+        optimizeMeshes: boolean,
+        meshoptCompression: boolean,
+    ): NativeConvertResult;
+
     /** Installs a callback invoked for every OpenUSD diagnostic. */
     setLogCallback(callback: (level: number, message: string) => void): void;
 

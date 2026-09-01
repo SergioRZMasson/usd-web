@@ -7,9 +7,20 @@
   },
   "configurePresets": [
     {
+      "name": "native",
+      "displayName": "Native C++ CLI (Release)",
+      "description": "Standard C++ USD-to-GLB command-line converter. Uses vcpkg when VCPKG_ROOT is set, or packages supplied through CMAKE_PREFIX_PATH.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/native",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_NATIVE_CLI": "ON"
+      }
+    },
+    {
       "name": "wasm",
       "displayName": "WebAssembly (Emscripten, Release)",
-      "description": "Static monolithic OpenUSD via vcpkg + Adobe's usdGltf plugin, compiled to wasm. Requires VCPKG_ROOT and Emscripten (emcc on PATH or EMSDK set).",
+      "description": "Static monolithic OpenUSD plus the optimized usdGltf fork, compiled with SIMD and LTO. Requires VCPKG_ROOT and Emscripten (emcc on PATH or EMSDK set).",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/wasm",
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
@@ -39,6 +50,11 @@
   ],
   "buildPresets": [
     {
+      "name": "native",
+      "displayName": "Native C++ CLI (Release)",
+      "configurePreset": "native"
+    },
+    {
       "name": "wasm",
       "displayName": "WebAssembly (Release)",
       "configurePreset": "wasm"
@@ -50,6 +66,19 @@
     }
   ],
   "workflowPresets": [
+    {
+      "name": "native",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "native"
+        },
+        {
+          "type": "build",
+          "name": "native"
+        }
+      ]
+    },
     {
       "name": "wasm",
       "steps": [

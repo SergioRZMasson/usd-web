@@ -73,6 +73,19 @@ export interface ConvertOptions {
     /** Output container. Defaults to `"glb"`. */
     format?: OutputFormat;
 
+    /**
+     * Losslessly weld duplicate vertices and optimize triangle/vertex order for GPU caches.
+     * Defaults to `true`.
+     */
+    optimizeMeshes?: boolean;
+
+    /**
+     * Emit `EXT_meshopt_compression` for GLB buffer views. This substantially reduces
+     * download size and is decoded efficiently by Babylon.js and other meshopt-aware
+     * glTF loaders. Defaults to `true` for GLB and is ignored for JSON glTF output.
+     */
+    meshoptCompression?: boolean;
+
     /** Diagnostics for this conversion only. */
     onLog?: (message: LogMessage) => void;
 }

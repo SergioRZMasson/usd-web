@@ -79,7 +79,9 @@ converter is nearly free.
 ## No special headers required
 
 The shipped module is **single-threaded**, so it needs no `SharedArrayBuffer` and therefore
-no cross-origin isolation. It runs from any static host, including GitHub Pages.
+no cross-origin isolation. It runs from any static host, including GitHub Pages. Release
+dependencies and the final module are compiled with WebAssembly SIMD and LTO; this requires
+a modern browser with the standardized SIMD extension.
 
 A pthreads build also exists (oneTBB with threading enabled) for throughput on large scenes.
 Using it requires the page to be cross-origin isolated:
@@ -104,8 +106,9 @@ main thread must stay responsive.
   OpenUSD; nothing else about it needs configuring.
 - **CMake 3.24+**, **Ninja**, **Git**, **Node 18+**.
 
-Everything else — OpenUSD, Adobe's plugins and tinygltf — is fetched by the build itself, so
-no paths have to be pointed at anything on your machine.
+Everything else — OpenUSD, the optimized USD-Fileformat-plugins fork, tinygltf, and
+meshoptimizer — is fetched by the build itself, so no paths have to be pointed at anything
+on your machine.
 
 ### One command
 
@@ -132,7 +135,7 @@ Either way the build:
 1. **vcpkg → OpenUSD** — compiled as a static, monolithic wasm library (no imaging, no
    Python) by the overlay port in [`ports/usd`](ports/usd), against a single-threaded
    oneTBB and zlib that vcpkg also builds for wasm.
-2. **submodules → Adobe's plugins + tinygltf** — compiled in place from
+2. **submodules → USD-Fileformat-plugins + tinygltf + meshoptimizer** — compiled in place from
    [`dependencies/`](dependencies).
 3. **this project** — the wasm module and its resource bundle.
 
@@ -162,6 +165,53 @@ This builds into `build/wasm-js/`, then runs `npm install` (only when `package.j
 The result is a ready-to-publish `js/dist`. It needs **Node/npm** on `PATH` on top of the
 `wasm` preset's prerequisites. The flag is `OFF` by default, so the plain `wasm` preset stays
 wasm-only for fast iteration.
+
+### Native C++ CLI and private-asset benchmarks
+
+The same converter also builds as standard C++:
+
+```sh
+cmake --preset native
+cmake --build --preset native
+
+build/native/bin/usd-web-gltf-cli \
+  --meshopt-compression \
+  --iterations 5 \
+  --asset-dir /path/to/asset-directory \
+  /path/to/input.usd \
+  /path/to/output.glb
+```
+
+The native preset uses vcpkg when `VCPKG_ROOT` is set. It can also use an existing OpenUSD
+installation supplied through `CMAKE_PREFIX_PATH`.
+
+Private inputs can be registered as paired baseline/optimized CTest benchmarks without
+copying them into the repository:
+
+```sh
+cmake --preset native \
+  -DUSD_WEB_BENCHMARK_INPUTS="/private/botsinbox.usd;/private/botsinbox-2.usda"
+cmake --build --preset native
+ctest --test-dir build/native -L benchmark --output-on-failure
+```
+
+Each baseline test disables mesh optimization. Each optimized test enables lossless mesh
+optimization and `EXT_meshopt_compression`; the CLI also decodes every compressed buffer
+view as a validity check and reports size, timing, vertex, triangle, primitive, and instance
+counts as JSON.
+
+On the two private robot scenes used to develop this path (one warm-up plus three measured
+Release conversions on Apple silicon), triangle and instance counts remained unchanged:
+
+|Input|Original GLB|Optimized GLB|Meshopt GLB|Vertices|Conversion, original → meshopt|
+|---|---:|---:|---:|---:|---:|
+|botsinbox|61.4 MB|21.6 MB|10.7 MB|1,805,526 → 554,439|494 ms → 580 ms|
+|botsinbox 2|40.5 MB|14.6 MB|8.2 MB|1,277,436 → 387,289|386 ms → 450 ms|
+
+The lossless optimization removes about 69% of stored vertices; meshopt reduces final GLB
+size by 80–83%. Encoding adds roughly 16–17% to conversion time for these inputs, trading a
+small one-time conversion cost for much lower network transfer, decode allocation, and GPU
+buffer upload costs. The sample USD files are intentionally not part of the repository.
 
 ### How the dependencies are wired
 
@@ -206,9 +256,10 @@ png/jpg/bmp/tga. TIFF and EXR textures are rejected with a clear warning instead
 producing wrong pixels. Since glTF has no core HDR texture format, every texture this
 pipeline emits is PNG or JPEG regardless.
 
-**Everything else is upstream Adobe code, compiled unmodified.** The Adobe checkout is never
-patched — only two things are supplied locally: build rules that produce static libraries
-(upstream builds shared, which Emscripten cannot link), and the `images.cpp` replacement.
+The translation itself comes from the pinned USD-Fileformat-plugins fork. That fork adds
+lossless mesh optimization and optional meshopt buffer compression; this repository supplies
+the static/native/wasm build rules, browser and CLI entry points, and the `images.cpp`
+replacement.
 
 ---
 
@@ -233,6 +284,20 @@ import { usdToGlb } from "usd-web-gltf";
 
 const glb = await usdToGlb(bytes, { fileName: "chair.usdz" });
 ```
+
+Mesh optimization and `EXT_meshopt_compression` are enabled by default for GLB output.
+They can be selected independently:
+
+```ts
+const result = await converter.convert(bytes, {
+    fileName: "chair.usdz",
+    optimizeMeshes: true,       // lossless weld + cache/overdraw/fetch ordering
+    meshoptCompression: true,   // GLB only; requires a meshopt-aware glTF loader
+});
+```
+
+Set `meshoptCompression: false` when targeting a loader without
+`EXT_meshopt_compression` support. Lossless mesh optimization remains useful on its own.
 
 ### Reusing the module
 
@@ -369,6 +434,8 @@ detailed read of the translation path
 | **Cameras** | Perspective and orthographic |
 | **Punctual lights** | Disk→spot, Distant→directional, Rect/Sphere→point |
 | **Native instancing** | Prototypes deduplicated |
+| **Runtime mesh optimization** | Lossless vertex welding, cache/overdraw/fetch ordering, and 16-bit indices where possible |
+| **GLB compression** | Required `EXT_meshopt_compression`; opt-out per conversion |
 | **Composition** | References, payloads, sublayers, variants — real USD composition |
 | **Stage metadata** | `upAxis`, `metersPerUnit` |
 
@@ -426,12 +493,12 @@ project as the reference for the material translation.
 
 ```
 CMakeLists.txt          the wasm build (find_package(pxr) from vcpkg + the submodules)
-CMakePresets.json       the `wasm` configure/build/workflow preset
+CMakePresets.json       native, `wasm`, and `wasm-js` configure/build/workflow presets
 vcpkg.json              manifest: depends on usd; pins the vcpkg baseline
 ports/                  vcpkg overlay ports (static monolithic usd; single-threaded tbb)
 triplets/               vcpkg overlay triplet: wasm32-emscripten, release, no pthreads
-dependencies/           git submodules: USD-Fileformat-plugins, tinygltf
-src/                    C++ — Emscripten bindings, stb image backend, WebResolver
+dependencies/           git submodules: USD-Fileformat-plugins, tinygltf, meshoptimizer
+src/                    C++ — native CLI, Emscripten bindings, stb image backend, WebResolver
 resources/              plugInfo.json manifests for the statically-linked plugins
 scripts/build.ps1       submodule init + Ninja shim + the `wasm` preset
 js/                     the npm package (TypeScript)

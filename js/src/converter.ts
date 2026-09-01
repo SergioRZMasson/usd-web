@@ -200,7 +200,13 @@ export class UsdConverter {
         fileName: string,
         options: ConvertOptions,
     ): Promise<ConvertResult> {
-        const { additionalFiles, format = 'glb', resolveByFileName = true } = options;
+        const {
+            additionalFiles,
+            format = 'glb',
+            meshoptCompression = true,
+            optimizeMeshes = true,
+            resolveByFileName = true,
+        } = options;
 
         const module = this.#module;
         const written: string[] = [];
@@ -234,7 +240,12 @@ export class UsdConverter {
             module.setAssetFallbackEnabled(resolveByFileName);
             module.registerAssetDirectory(SCRATCH_DIR);
 
-            const native = module.convert(inputPath, outputPath);
+            const native = module.convertWithOptions(
+                inputPath,
+                outputPath,
+                optimizeMeshes,
+                format === 'glb' && meshoptCompression,
+            );
             // A fatal USD error terminates the runtime from inside the call above, so
             // this is checked before touching any of the returned values.
             if (this.#abortState.reason !== undefined) {

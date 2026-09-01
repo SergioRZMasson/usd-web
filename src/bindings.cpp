@@ -173,7 +173,10 @@ ensureResolver()
 /// @param outputPath Path to write, e.g. "/work/scene.glb". The extension selects the
 ///                   output format, exactly as it would on the command line.
 std::unique_ptr<ConvertResult>
-convert(const std::string& inputPath, const std::string& outputPath)
+convertWithOptions(const std::string& inputPath,
+                   const std::string& outputPath,
+                   bool optimizeMeshes,
+                   bool meshoptCompression)
 {
     ensureResolver();
     diagnosticDelegate();
@@ -189,7 +192,12 @@ convert(const std::string& inputPath, const std::string& outputPath)
     }
     // Dispatches to UsdGltfFileFormat::WriteToFile through SdfFileFormat, which is only
     // reachable because the plugin registered itself from its static initialisers.
-    if (!stage->Export(outputPath)) {
+    SdfLayer::FileFormatArguments arguments;
+    arguments["embedImages"] = "true";
+    arguments["useMaterialExtensions"] = "true";
+    arguments["optimizeMeshes"] = optimizeMeshes ? "true" : "false";
+    arguments["meshoptCompression"] = meshoptCompression ? "true" : "false";
+    if (!stage->Export(outputPath, false, arguments)) {
         result->setError("USD could not export '" + inputPath + "' to '" + outputPath +
                          "'. Is the glTF file format plugin registered?");
         return result;
@@ -211,6 +219,12 @@ convert(const std::string& inputPath, const std::string& outputPath)
       std::chrono::duration<double, std::milli>(finished - started).count());
     result->setData(std::move(bytes));
     return result;
+}
+
+std::unique_ptr<ConvertResult>
+convert(const std::string& inputPath, const std::string& outputPath)
+{
+    return convertWithOptions(inputPath, outputPath, true, true);
 }
 
 void
@@ -305,6 +319,7 @@ EMSCRIPTEN_BINDINGS(usd_web_gltf)
         .function("durationMs", &ConvertResult::durationMs);
 
     emscripten::function("convert", &convert);
+    emscripten::function("convertWithOptions", &convertWithOptions);
     emscripten::function("setLogCallback", &setLogCallback);
     emscripten::function("getSupportedOutputFormats", &getSupportedOutputFormats);
     emscripten::function("isGltfPluginAvailable", &isGltfPluginAvailable);
