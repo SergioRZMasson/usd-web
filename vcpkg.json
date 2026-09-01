@@ -2,9 +2,9 @@
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "usd-web-gltf",
   "version": "0.1.0",
-  "description": "OpenUSD and Adobe's usdGltf plugin compiled to WebAssembly.",
+  "description": "OpenUSD and the optimized usdGltf fork compiled for native and WebAssembly runtimes.",
   "homepage": "https://github.com/SergioRZMasson/usd-web",
-  "builtin-baseline": "ef3a5a82e39424b7f5740c4576f027c3173767f4",
+  "builtin-baseline": "9885cff3673359c51faa080e1252925c203b9f34",
   "dependencies": [
     "usd"
   ]

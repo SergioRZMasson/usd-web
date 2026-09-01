@@ -205,11 +205,11 @@ Release conversions on Apple silicon), triangle and instance counts remained unc
 
 |Input|Original GLB|Optimized GLB|Meshopt GLB|Vertices|Conversion, original → meshopt|
 |---|---:|---:|---:|---:|---:|
-|botsinbox|61.4 MB|21.6 MB|10.7 MB|1,805,526 → 554,439|494 ms → 580 ms|
-|botsinbox 2|40.5 MB|14.6 MB|8.2 MB|1,277,436 → 387,289|386 ms → 450 ms|
+|botsinbox|61.4 MB|21.6 MB|10.7 MB|1,805,526 → 554,439|510 ms → 607 ms|
+|botsinbox 2|40.5 MB|14.6 MB|8.2 MB|1,277,436 → 387,289|395 ms → 466 ms|
 
 The lossless optimization removes about 69% of stored vertices; meshopt reduces final GLB
-size by 80–83%. Encoding adds roughly 16–17% to conversion time for these inputs, trading a
+size by 80–83%. Encoding adds roughly 18–19% to conversion time for these inputs, trading a
 small one-time conversion cost for much lower network transfer, decode allocation, and GPU
 buffer upload costs. The sample USD files are intentionally not part of the repository.
 
