@@ -18,6 +18,7 @@ import { VertexBuffer } from '@babylonjs/core/Buffers/buffer.js';
 import { LoadAssetContainerAsync } from '@babylonjs/core/Loading/sceneLoader.js';
 import { SceneLoaderFlags } from '@babylonjs/core/Loading/sceneLoaderFlags.js';
 import { LoadAssetContainerFromSerializedScene } from '@babylonjs/core/Loading/Plugins/babylonFileLoader.js';
+import { materializeCommandBuffers } from '@openusd-wasm/babylon';
 
 // Side-effect imports required by the two intermediate-format loaders.
 import '@babylonjs/core/Helpers/sceneHelpers.js';
@@ -43,9 +44,14 @@ const els = {
     loadingMessage: document.getElementById('loadingMessage'),
 };
 const requestedFormat = new URLSearchParams(location.search).get('format');
-if (requestedFormat === 'glb' || requestedFormat === 'babylon') {
+if (requestedFormat === 'glb' || requestedFormat === 'babylon' || requestedFormat === 'direct') {
     els.intermediate.value = requestedFormat;
 }
+
+const backendForFormat = (format) =>
+    format === 'direct' ? 'direct' : format === 'babylon' ? 'babylon' : 'gltf';
+const labelForBackend = (backend) =>
+    backend === 'direct' ? 'Direct' : backend === 'gltf' ? 'GLB' : '.babylon';
 
 // --- logging ---------------------------------------------------------------
 
@@ -215,7 +221,7 @@ function frameScene(meshes) {
 
 // --- converter -------------------------------------------------------------
 
-const initialBackend = els.intermediate.value === 'babylon' ? 'babylon' : 'gltf';
+const initialBackend = backendForFormat(els.intermediate.value);
 let conversionWorker = null;
 let lastLoad = null;
 const workerRequests = new Map();
@@ -292,12 +298,12 @@ function requestWorker(type, payload, transfer = []) {
 
 async function initializeBackend(backend) {
     const { info } = await requestWorker('initialize', { backend });
-    const label = backend === 'gltf' ? 'GLB' : '.babylon';
+    const label = labelForBackend(backend);
     log(`${label} worker: OpenUSD ${info.usdVersion}; formats ${info.supportedOutputFormats.join(', ')}`);
     return info;
 }
 
-setStatus(`Loading ${initialBackend === 'gltf' ? 'GLB' : '.babylon'} exporter worker…`, true);
+setStatus(`Loading ${labelForBackend(initialBackend)} exporter worker…`, true);
 showLoading('Starting conversion worker...');
 
 try {
@@ -375,22 +381,10 @@ async function runLoad(generation, asset) {
     setBusy(true);
 
     const intermediate = els.intermediate.value;
-    const backend = intermediate === 'babylon' ? 'babylon' : 'gltf';
+    const backend = backendForFormat(intermediate);
     try {
         const started = performance.now();
-        const {
-            data,
-            durationMs,
-            exportDispatchMs,
-            heapCopyMs,
-            missingAssets,
-            pluginReadMs,
-            readbackMs,
-            serializeMs,
-            stageFlattenMs,
-            stageOpenMs,
-            transcodeMs,
-        } = (
+        const workerResult = (
             await requestWorker(
                 'convert',
                 {
@@ -426,11 +420,85 @@ async function runLoad(generation, asset) {
 
         if (generation !== loadGeneration) return;
 
-        const intermediateLabel = intermediate === 'babylon' ? '.babylon' : 'GLB';
-        log(
-            `Converted to ${intermediateLabel}: ${formatBytes(data.byteLength)} in ` +
-                `${durationMs.toFixed(0)} ms`,
-        );
+        let container;
+        let durationMs;
+        let intermediateByteLength;
+        let intermediateLabel;
+        let phaseRows;
+        let missingAssets;
+        let loadMs;
+
+        if (workerResult.kind === 'direct') {
+            const { commands, data, statistics, timings } = workerResult;
+            durationMs = timings.durationMs;
+            intermediateByteLength = commands.byteLength + data.byteLength;
+            intermediateLabel = 'Command + data';
+            missingAssets = workerResult.missingAssets;
+            log(
+                `Extracted ${formatBytes(commands.byteLength)} of commands and ` +
+                    `${formatBytes(data.byteLength)} of raw data in ${durationMs.toFixed(0)} ms`,
+            );
+            updateLoading('Creating Babylon.js objects from command buffers...');
+            const loadStarted = performance.now();
+            const materialized = await materializeCommandBuffers(
+                scene,
+                commands.buffer,
+                data.buffer,
+                false,
+            );
+            container = materialized.container;
+            loadMs = performance.now() - loadStarted;
+            phaseRows = [
+                ['OpenUSD open', `${timings.stageOpenMs.toFixed(0)} ms`],
+                ['Direct stage read', `${timings.stageReadMs.toFixed(0)} ms`],
+                ['Mesh preparation', `${timings.preparationMs.toFixed(0)} ms`],
+                ['Command packing', `${timings.packingMs.toFixed(0)} ms`],
+                ['Heap → JavaScript', `${timings.heapCopyMs.toFixed(0)} ms`],
+                ['Command buffer', formatBytes(statistics.commandBytes)],
+                ['Raw data buffer', formatBytes(statistics.dataBytes)],
+            ];
+        } else {
+            const {
+                data,
+                exportDispatchMs,
+                heapCopyMs,
+                pluginReadMs,
+                readbackMs,
+                serializeMs,
+                stageFlattenMs,
+                stageOpenMs,
+                transcodeMs,
+            } = workerResult;
+            durationMs = workerResult.durationMs;
+            intermediateByteLength = data.byteLength;
+            intermediateLabel = intermediate === 'babylon' ? '.babylon' : 'GLB';
+            missingAssets = workerResult.missingAssets;
+            log(
+                `Converted to ${intermediateLabel}: ${formatBytes(data.byteLength)} in ` +
+                    `${durationMs.toFixed(0)} ms`,
+            );
+            updateLoading(`Loading ${intermediateLabel} into Babylon.js...`);
+            const loadStarted = performance.now();
+            container =
+                intermediate === 'babylon'
+                    ? LoadAssetContainerFromSerializedScene(
+                          scene,
+                          new TextDecoder().decode(data),
+                          '',
+                      )
+                    : await LoadAssetContainerAsync(data, scene, { pluginExtension: '.glb' });
+            loadMs = performance.now() - loadStarted;
+            phaseRows = [
+                ['OpenUSD open', `${stageOpenMs.toFixed(0)} ms`],
+                ['OpenUSD flatten', `${stageFlattenMs.toFixed(0)} ms`],
+                ['Plugin USD read', `${pluginReadMs.toFixed(0)} ms`],
+                ['Transcode / mesh prep', `${transcodeMs.toFixed(0)} ms`],
+                ['Serialize', `${serializeMs.toFixed(0)} ms`],
+                ['Export dispatch', `${exportDispatchMs.toFixed(0)} ms`],
+                ['Wasm readback', `${readbackMs.toFixed(0)} ms`],
+                ['Heap → JavaScript', `${heapCopyMs.toFixed(0)} ms`],
+            ];
+        }
 
         if (missingAssets.length > 0) {
             log(
@@ -439,17 +507,6 @@ async function runLoad(generation, asset) {
                 'warning',
             );
         }
-
-        updateLoading(`Loading ${intermediateLabel} into Babylon.js...`);
-        const loadStarted = performance.now();
-        const container =
-            intermediate === 'babylon'
-                ? LoadAssetContainerFromSerializedScene(
-                      scene,
-                      new TextDecoder().decode(data),
-                      '',
-                  )
-                : await LoadAssetContainerAsync(data, scene, { pluginExtension: '.glb' });
 
         // Only release the old asset once the new one has loaded, so a failure part-way
         // through leaves the previous scene on screen rather than an empty one.
@@ -461,7 +518,6 @@ async function runLoad(generation, asset) {
         disposeLoadedAsset();
         container.addAllToScene();
         loadedContainer = container;
-        const loadMs = performance.now() - loadStarted;
 
         const meshes = container.meshes.filter((m) => m.getTotalVertices() > 0);
         applyVertexColorMaterials(container, meshes);
@@ -472,17 +528,10 @@ async function runLoad(generation, asset) {
 
         renderStats([
             ['Source', `${fileName} · ${formatBytes(sourceByteLength)}`],
-            [intermediateLabel, formatBytes(data.byteLength)],
-            ['OpenUSD open', `${stageOpenMs.toFixed(0)} ms`],
-            ['OpenUSD flatten', `${stageFlattenMs.toFixed(0)} ms`],
-            ['Plugin USD read', `${pluginReadMs.toFixed(0)} ms`],
-            ['Transcode / mesh prep', `${transcodeMs.toFixed(0)} ms`],
-            ['Serialize', `${serializeMs.toFixed(0)} ms`],
-            ['Export dispatch', `${exportDispatchMs.toFixed(0)} ms`],
-            ['Wasm readback', `${readbackMs.toFixed(0)} ms`],
-            ['Heap → JavaScript', `${heapCopyMs.toFixed(0)} ms`],
+            [intermediateLabel, formatBytes(intermediateByteLength)],
+            ...phaseRows,
             [`USD → ${intermediateLabel}`, `${durationMs.toFixed(0)} ms`],
-            ['Babylon load', `${loadMs.toFixed(0)} ms`],
+            [backend === 'direct' ? 'Babylon materialize' : 'Babylon load', `${loadMs.toFixed(0)} ms`],
             ['Total', `${(convertMs + loadMs).toFixed(0)} ms`],
             ['Meshes', String(meshes.length)],
             ['Vertices', vertices.toLocaleString()],
@@ -527,8 +576,8 @@ els.intermediate.addEventListener('change', async () => {
     if (lastLoad) {
         await reconvertLastUsd();
     } else {
-        const backend = els.intermediate.value === 'babylon' ? 'babylon' : 'gltf';
-        const label = backend === 'gltf' ? 'GLB' : '.babylon';
+        const backend = backendForFormat(els.intermediate.value);
+        const label = labelForBackend(backend);
         setStatus(`Loading ${label} exporter worker…`, true);
         showLoading(`Loading the ${label} exporter...`);
         setBusy(true);
@@ -586,10 +635,15 @@ async function loadFileSet(files) {
         return;
     }
 
-    // Prefer the shallowest USD file: in a published asset the root layer sits at the
-    // top and its dependencies live in subdirectories.
+    const requestedRoot = new URLSearchParams(location.search).get('root');
+    // Prefer an explicitly requested root for reproducible benchmarks, then the shallowest
+    // USD file: in a published asset the root layer usually sits above its dependencies.
     candidates.sort(
-        (a, b) => a.path.split('/').length - b.path.split('/').length || a.path.localeCompare(b.path),
+        (a, b) =>
+            Number(!(a.path === requestedRoot || a.path.endsWith(`/${requestedRoot}`))) -
+                Number(!(b.path === requestedRoot || b.path.endsWith(`/${requestedRoot}`))) ||
+            a.path.split('/').length - b.path.split('/').length ||
+            a.path.localeCompare(b.path),
     );
     const root = candidates[0];
 

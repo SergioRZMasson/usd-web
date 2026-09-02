@@ -295,6 +295,31 @@ if(TARGET usd_m)
     target_link_libraries(usdBabylon PUBLIC usd_m)
 endif()
 
+# ---------------------------------------------------------------------------
+# usdDirectScene — composed-stage to binary Babylon command/data buffers
+# ---------------------------------------------------------------------------
+
+add_library(usdDirectScene STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/direct/directScene.cpp"
+)
+target_include_directories(usdDirectScene
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/direct"
+    PRIVATE
+        "${ADOBE_PLUGINS_DIR}/gltf/src"
+)
+if(EMSCRIPTEN)
+    target_compile_options(usdDirectScene PRIVATE -O3 -msimd128 -flto)
+endif()
+target_link_libraries(usdDirectScene PUBLIC
+    fileformatUtils
+    usdGltf
+    usd usdGeom usdSkel usdShade
+)
+if(TARGET usd_m)
+    target_link_libraries(usdDirectScene PUBLIC usd_m)
+endif()
+
 set(_gltf_plugin_resources "${CMAKE_CURRENT_SOURCE_DIR}/resources/usdGltf")
 set(_babylon_plugin_resources "${CMAKE_CURRENT_SOURCE_DIR}/resources/usdBabylon")
 set(_resolver_resources "${CMAKE_CURRENT_SOURCE_DIR}/resources/usdWebResolver")
@@ -391,6 +416,49 @@ if(EMSCRIPTEN)
     )
     set_target_properties(usd-web-babylon PROPERTIES
         OUTPUT_NAME "usd-web-babylon"
+        SUFFIX ".js"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+
+    add_executable(openusd-babylon-bridge
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/direct/directBindings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/webResolver.cpp"
+    )
+    target_include_directories(openusd-babylon-bridge PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/direct"
+    )
+    target_link_libraries(openusd-babylon-bridge PRIVATE usdDirectScene)
+    target_compile_options(openusd-babylon-bridge PRIVATE -O3 -msimd128 -flto)
+    target_link_options(openusd-babylon-bridge PRIVATE
+        "SHELL:-Wl,--whole-archive $<TARGET_FILE:usd_m> -Wl,--no-whole-archive"
+    )
+
+    set(_direct_resource_stage "${CMAKE_BINARY_DIR}/usd-resources-direct")
+    file(REMOVE_RECURSE "${_direct_resource_stage}")
+    file(COPY "${PXR_USD_PLUGIN_RESOURCES}/" DESTINATION "${_direct_resource_stage}")
+    file(COPY "${_resolver_resources}" DESTINATION "${_direct_resource_stage}")
+
+    target_link_options(openusd-babylon-bridge PRIVATE
+        --bind
+        -sMODULARIZE=1
+        -sEXPORT_NAME=createOpenUsdBabylonModule
+        -sENVIRONMENT=web,worker,node
+        -sALLOW_MEMORY_GROWTH=1
+        -sMEMORY_GROWTH_GEOMETRIC_STEP=0.5
+        -sMAXIMUM_MEMORY=2GB
+        -sFORCE_FILESYSTEM=1
+        -sEXPORTED_RUNTIME_METHODS=FS,HEAPU8
+        -sSTACK_SIZE=1MB
+        -sEXPORT_ES6=1
+        -sASSERTIONS=0
+        -msimd128
+        -flto
+        --strip-debug
+        "SHELL:--preload-file ${_direct_resource_stage}@/usd"
+    )
+    set_target_properties(openusd-babylon-bridge PROPERTIES
+        OUTPUT_NAME "openusd-babylon"
         SUFFIX ".js"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )

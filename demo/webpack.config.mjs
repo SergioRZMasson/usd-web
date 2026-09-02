@@ -70,6 +70,13 @@ export default {
         clean: true,
         environment: { dynamicImport: true, module: true },
     },
+    resolve: {
+        // The local file: dependency has its own development install of Babylon.js. Force both
+        // packages onto the demo's peer instance so scene objects and shader stores are shared.
+        alias: {
+            '@babylonjs/core': resolve(here, 'node_modules', '@babylonjs/core'),
+        },
+    },
     module: {
         // The bundled usd-web-gltf package locates its glue with a webpackIgnore'd dynamic
         // import() and computes the .wasm/.data base with `new URL(spec, import.meta.url)`.

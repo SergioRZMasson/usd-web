@@ -11,6 +11,7 @@ node_modules/
 
 # npm package build output (regenerated from the native build)
 js/dist/
+babylon/dist/
 
 # NOTE: docs/ is intentionally NOT ignored. It holds the built demo and the WebAssembly
 # artifacts, and is published by GitHub Pages so partners can try the converter without

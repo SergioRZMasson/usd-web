@@ -1,8 +1,8 @@
 # usd-web
 
-**OpenUSD with independently linked GLB and Babylon JSON exporters, compiled to
-WebAssembly.** Converts USD (`.usd`, `.usda`, `.usdc`, `.usdz`) in the browser and lets the
-demo switch the intermediate format at runtime for direct size and timing comparisons.
+**OpenUSD with GLB, Babylon JSON, and direct Babylon command-buffer paths compiled to
+WebAssembly.** Converts USD (`.usd`, `.usda`, `.usdc`, `.usdz`) in a worker and lets the demo
+compare file intermediates with direct Babylon.js scene construction.
 
 ```ts
 import { UsdConverter, usdToGlb } from "usd-web-gltf";
@@ -11,6 +11,10 @@ const glb = await usdToGlb(await file.arrayBuffer(), { fileName: file.name });
 
 const babylonConverter = await UsdConverter.create({ backend: "babylon" });
 const babylon = await babylonConverter.convert(bytes, { fileName: file.name });
+
+import { loadUsdIntoSceneAsync } from "@openusd-wasm/babylon";
+
+const result = await loadUsdIntoSceneAsync(scene, bytes, { fileName: file.name });
 ```
 
 **[▶ Live demo](https://sergiorzmasson.github.io/usd-web/)** — drop in a USD file and see
@@ -32,10 +36,10 @@ the spec is enormous and most of it has no meaning in a browser. glTF is the web
 Adobe maintain a high-quality USD→glTF translator in
 [USD-Fileformat-plugins](https://github.com/adobe/USD-Fileformat-plugins).
 
-This project makes that translator run in the browser and also includes an export-only
-`.babylon` file format plugin. Both use the same composed `UsdData`, lossless vertex welding,
-triangle ordering, asset resolver, and OpenUSD build. They are emitted as separate wasm
-modules so their plugin cost can be measured independently.
+This project makes that translator run in the browser, includes an export-only `.babylon`
+file format plugin, and provides a direct C++ bridge for Babylon.js. The direct bridge reads
+the composed stage without flattening and returns a versioned command queue plus aligned raw
+texture, geometry, skinning, matrix, and animation data.
 
 ### The key finding: USD plugins work in WebAssembly
 
@@ -73,10 +77,10 @@ Release SIMD/LTO build, OpenUSD 26.05, no imaging, no Python, single-threaded:
 |---|---:|---:|---:|
 | `usd-web-gltf.wasm` | 10.69 MB | 2.85 MB | 1.79 MB |
 | `usd-web-babylon.wasm` | 9.79 MB | 2.57 MB | 1.61 MB |
+| `openusd-babylon.wasm` | 9.46 MB | 2.47 MB | 1.54 MB |
 
-The export-only Babylon plugin module is **0.89 MB (8.4%) smaller raw** and 0.18 MB smaller
-after maximum Brotli compression. Each module has its own roughly 0.76 MB USD resource
-bundle, containing only that exporter plugin's manifest.
+The direct bridge is the smallest module because it does not link an output file-format
+plugin. Each module has its own roughly 0.76 MB USD resource bundle.
 
 **Serve the `.wasm` with brotli.** It is the difference between 12 MB and 1.9 MB on the wire.
 
@@ -97,8 +101,8 @@ Cross-Origin-Embedder-Policy: require-corp
 
 Conversion is CPU-bound and synchronous once it starts, so run it in a Web Worker if the
 main thread must stay responsive. The comparison demo does this by transferring the selected
-USD files into a dedicated module worker. The worker retains the source for GLB/Babylon
-re-conversion and transfers only the completed intermediate buffer back to the UI.
+USD files into a dedicated module worker. GLB and Babylon JSON transfer one completed file;
+the direct backend transfers a compact command queue and a separate raw-data buffer.
 
 While conversion and Babylon loading are in progress, the viewport displays an animated
 loading overlay. Because OpenUSD and the exporter execute in the worker, rendering, spinner
@@ -230,6 +234,29 @@ advantage is lower Babylon object overhead: botsinbox loads as 57 source meshes 
 instances instead of thousands of glTF primitive meshes. The comparison demo reports actual
 browser conversion and Babylon loading time for both choices. The private sample files are
 not part of the repository.
+
+### Direct Babylon command-buffer results
+
+The direct backend opens the composed `UsdStage`, calls the shared `readStage` traversal
+without flattening or reopening a layer, and packs all Babylon instructions in C++. The
+`@openusd-wasm/babylon` package materializes those buffers on the main thread after worker
+extraction.
+
+Single-run browser measurements from the same headless Chrome session configuration:
+
+|Input|Backend|Native conversion|Babylon load/materialize|Browser total|Intermediate|
+|---|---:|---:|---:|---:|---:|
+|botsinbox|GLB|1,070 ms|139 ms|2,218 ms|10.21 MB|
+|botsinbox|Babylon JSON|1,119 ms|110 ms|2,151 ms|38.89 MB|
+|botsinbox|Direct|891 ms|35 ms|1,980 ms|22.61 MB|
+|botsinbox 2|GLB|841 ms|132 ms|988 ms|7.81 MB|
+|botsinbox 2|Babylon JSON|883 ms|84 ms|981 ms|27.69 MB|
+|botsinbox 2|Direct|753 ms|28 ms|797 ms|15.06 MB|
+
+The direct path was 8-19% faster end to end in these runs and reduced Babylon object
+creation to 28-35 ms. Its raw geometry buffer is larger than meshopt GLB, but 42-46% smaller
+than Babylon JSON. It also preserves source meshes and instances directly instead of making
+Babylon's glTF loader expand material primitives into thousands of runtime mesh objects.
 
 ### OpenUSD and exporter phase timing
 
@@ -568,6 +595,7 @@ src/                    C++ — both CLIs/exporters, Emscripten bindings, stb im
 resources/              plugInfo.json manifests for the statically-linked plugins
 scripts/build.ps1       submodule init + Ninja shim + the `wasm` preset
 js/                     the npm package (TypeScript)
+babylon/                @openusd-wasm/babylon direct worker and materializer package
 demo/                   browser demo source; `npm run build` writes ../docs
 demo/babylon-loader-test/   integration test for the Babylon.js USD loader
 docs/                   built demo + wasm, committed and published by GitHub Pages
@@ -576,7 +604,9 @@ test/                   node-based conversion and resolver tests
 
 `docs/` is committed on purpose: GitHub Pages serves it directly, so partners can compare
 both converters without installing a toolchain. Use `?format=glb&sample=cube.usda` or
-`?format=babylon&sample=cube.usda` for deterministic comparison URLs.
+`?format=babylon&sample=cube.usda` or `?format=direct&sample=cube.usda` for deterministic
+comparison URLs. Add `root=<relative USD path>` when benchmarking a folder containing
+multiple candidate root layers.
 
 The folder is named `docs` rather than `dist` because GitHub Pages can only serve `/` or
 `/docs` when deploying from a branch. Publishing any other folder would require a Actions

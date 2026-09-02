@@ -32,6 +32,9 @@ const WASM_ARTIFACTS = [
     'usd-web-babylon.js',
     'usd-web-babylon.wasm',
     'usd-web-babylon.data',
+    'openusd-babylon.js',
+    'openusd-babylon.wasm',
+    'openusd-babylon.data',
 ];
 
 if (!existsSync(wasmSourceDir)) {
