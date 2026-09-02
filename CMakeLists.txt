@@ -307,7 +307,11 @@ if(EMSCRIPTEN)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/bindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/webResolver.cpp"
     )
-    target_include_directories(usd-web-gltf PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_include_directories(usd-web-gltf PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${ADOBE_PLUGINS_DIR}/gltf/src"
+    )
+    target_compile_definitions(usd-web-gltf PRIVATE USD_WEB_GLTF_BACKEND)
     target_link_libraries(usd-web-gltf PRIVATE usdGltf fileformatUtils)
     target_compile_options(usd-web-gltf PRIVATE -O3 -msimd128 -flto)
     target_link_options(usd-web-gltf PRIVATE
@@ -349,7 +353,11 @@ if(EMSCRIPTEN)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/bindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/webResolver.cpp"
     )
-    target_include_directories(usd-web-babylon PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_include_directories(usd-web-babylon PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/babylon"
+    )
+    target_compile_definitions(usd-web-babylon PRIVATE USD_WEB_BABYLON_BACKEND)
     target_link_libraries(usd-web-babylon PRIVATE usdBabylon)
     target_compile_options(usd-web-babylon PRIVATE -O3 -msimd128 -flto)
     target_link_options(usd-web-babylon PRIVATE
@@ -396,6 +404,7 @@ elseif(BUILD_NATIVE_CLI)
     )
     target_include_directories(usd-web-gltf-cli PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${ADOBE_PLUGINS_DIR}/gltf/src"
         "${TINYGLTF_DIR}"
     )
     target_compile_definitions(usd-web-gltf-cli PRIVATE

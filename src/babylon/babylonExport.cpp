@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iterator>
@@ -1240,8 +1241,12 @@ writeAnimationGroups(std::ostream& output, const UsdData& data)
 } // namespace
 
 bool
-exportScene(const ExportOptions& options, UsdData& data, std::ostream& output)
+exportScene(const ExportOptions& options,
+            UsdData& data,
+            std::ostream& output,
+            ExportPhaseTiming* timing)
 {
+    const auto preparationStarted = std::chrono::steady_clock::now();
     for (Mesh& mesh : data.meshes) {
         if (mesh.points.empty()) {
             continue;
@@ -1254,6 +1259,8 @@ exportScene(const ExportOptions& options, UsdData& data, std::ostream& output)
     }
 
     const MeshGroups groups = collectMeshGroups(data);
+    const auto preparationFinished = std::chrono::steady_clock::now();
+    const auto serializationStarted = preparationFinished;
     output << "{\"producer\":{\"name\":\"usd-web\",\"version\":\"1.0\","
               "\"exporter_version\":\"1.0\",\"file\":\"USD\"},"
               "\"useRightHandedSystem\":false,";
@@ -1265,6 +1272,15 @@ exportScene(const ExportOptions& options, UsdData& data, std::ostream& output)
     writeMeshes(output, data, groups);
     writeAnimationGroups(output, data);
     output.put('}');
+    const auto serializationFinished = std::chrono::steady_clock::now();
+    if (timing != nullptr) {
+        timing->meshPreparationMs =
+          std::chrono::duration<double, std::milli>(preparationFinished - preparationStarted)
+            .count();
+        timing->serializationMs =
+          std::chrono::duration<double, std::milli>(serializationFinished - serializationStarted)
+            .count();
+    }
     return output.good();
 }
 

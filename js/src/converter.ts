@@ -265,6 +265,7 @@ export class UsdConverter {
                 format === 'glb' && meshoptCompression,
                 format === 'babylon' && embedTextures,
             );
+            const nativeDurationMs = native.durationMs();
             // A fatal USD error terminates the runtime from inside the call above, so
             // this is checked before touching any of the returned values.
             if (this.#abortState.reason !== undefined) {
@@ -280,12 +281,23 @@ export class UsdConverter {
                 // growth can also detach the previous HEAPU8 view.
                 const ptr = native.dataPtr();
                 const size = native.dataSize();
+                const heapCopyStarted = performance.now();
                 const data = module.HEAPU8.slice(ptr, ptr + size);
+                const heapCopyMs = performance.now() - heapCopyStarted;
 
                 return {
                     data,
                     fileName: withExtension(fileName, format),
-                    durationMs: native.durationMs(),
+                    durationMs: nativeDurationMs + heapCopyMs,
+                    nativeDurationMs,
+                    stageOpenMs: native.stageOpenMs(),
+                    stageFlattenMs: native.stageFlattenMs(),
+                    exportDispatchMs: native.exportDispatchMs(),
+                    pluginReadMs: native.pluginReadMs(),
+                    transcodeMs: native.transcodeMs(),
+                    serializeMs: native.serializeMs(),
+                    readbackMs: native.readbackMs(),
+                    heapCopyMs,
                     log: this.#activeLog,
                     missingAssets: module
                         .getUnresolvedAssets()

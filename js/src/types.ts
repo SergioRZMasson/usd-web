@@ -109,8 +109,26 @@ export interface ConvertResult {
     /** Suggested output file name, derived from the input name. */
     fileName: string;
 
-    /** Duration of the native conversion, in milliseconds. */
+    /** End-to-end native call plus wasm-heap-to-JavaScript output copy. */
     durationMs: number;
+    /** Native C++ conversion through filesystem readback, excluding the JS heap copy. */
+    nativeDurationMs: number;
+    /** OpenUSD stage construction and initial composition. */
+    stageOpenMs: number;
+    /** OpenUSD stage flattening before file-format dispatch. */
+    stageFlattenMs: number;
+    /** Total Sdf file-format dispatch, including plugin extraction and output. */
+    exportDispatchMs: number;
+    /** Plugin conversion from the flattened USD layer into its intermediate scene data. */
+    pluginReadMs: number;
+    /** Geometry/material transcoding or mesh preparation inside the exporter. */
+    transcodeMs: number;
+    /** GLB or Babylon JSON serialization performed by the exporter. */
+    serializeMs: number;
+    /** Copying the completed file back out of Emscripten's virtual filesystem. */
+    readbackMs: number;
+    /** Copying the native result vector from the wasm heap into a JavaScript Uint8Array. */
+    heapCopyMs: number;
 
     /** Diagnostics emitted during this conversion. */
     log: LogMessage[];

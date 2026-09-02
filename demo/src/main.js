@@ -295,7 +295,19 @@ async function runLoad(generation, bytes, fileName, additionalFiles) {
     try {
         converter = await getConverter(backend);
         const started = performance.now();
-        const { data, durationMs, missingAssets } = await converter.convert(bytes, {
+        const {
+            data,
+            durationMs,
+            exportDispatchMs,
+            heapCopyMs,
+            missingAssets,
+            pluginReadMs,
+            readbackMs,
+            serializeMs,
+            stageFlattenMs,
+            stageOpenMs,
+            transcodeMs,
+        } = await converter.convert(bytes, {
             fileName,
             additionalFiles,
             format: intermediate,
@@ -350,6 +362,14 @@ async function runLoad(generation, bytes, fileName, additionalFiles) {
         renderStats([
             ['Source', `${fileName} · ${formatBytes(bytes.byteLength)}`],
             [intermediateLabel, formatBytes(data.byteLength)],
+            ['OpenUSD open', `${stageOpenMs.toFixed(0)} ms`],
+            ['OpenUSD flatten', `${stageFlattenMs.toFixed(0)} ms`],
+            ['Plugin USD read', `${pluginReadMs.toFixed(0)} ms`],
+            ['Transcode / mesh prep', `${transcodeMs.toFixed(0)} ms`],
+            ['Serialize', `${serializeMs.toFixed(0)} ms`],
+            ['Export dispatch', `${exportDispatchMs.toFixed(0)} ms`],
+            ['Wasm readback', `${readbackMs.toFixed(0)} ms`],
+            ['Heap → JavaScript', `${heapCopyMs.toFixed(0)} ms`],
             [`USD → ${intermediateLabel}`, `${durationMs.toFixed(0)} ms`],
             ['Babylon load', `${loadMs.toFixed(0)} ms`],
             ['Total', `${(convertMs + loadMs).toFixed(0)} ms`],

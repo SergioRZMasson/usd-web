@@ -16,9 +16,16 @@
 #include <pxr/base/tf/type.h>
 #include <pxr/usd/ar/resolver.h>
 #include <pxr/usd/sdf/fileFormat.h>
+#include <pxr/usd/sdf/layer.h>
 #include <pxr/usd/usd/stage.h>
 
 #include "webResolver.h"
+
+#if defined(USD_WEB_GLTF_BACKEND)
+#include <exportTiming.h>
+#elif defined(USD_WEB_BABYLON_BACKEND)
+#include "babylonExport.h"
+#endif
 
 #include <emscripten/bind.h>
 
@@ -101,6 +108,13 @@ public:
     bool ok() const { return _ok; }
     std::string error() const { return _error; }
     double durationMs() const { return _durationMs; }
+    double stageOpenMs() const { return _stageOpenMs; }
+    double stageFlattenMs() const { return _stageFlattenMs; }
+    double exportDispatchMs() const { return _exportDispatchMs; }
+    double pluginReadMs() const { return _pluginReadMs; }
+    double transcodeMs() const { return _transcodeMs; }
+    double serializeMs() const { return _serializeMs; }
+    double readbackMs() const { return _readbackMs; }
 
     /// Offset of the payload within HEAPU8.
     uintptr_t dataPtr() const { return reinterpret_cast<uintptr_t>(_data.data()); }
@@ -119,11 +133,25 @@ public:
     }
 
     void setDuration(double ms) { _durationMs = ms; }
+    void setStageOpen(double ms) { _stageOpenMs = ms; }
+    void setStageFlatten(double ms) { _stageFlattenMs = ms; }
+    void setExportDispatch(double ms) { _exportDispatchMs = ms; }
+    void setPluginRead(double ms) { _pluginReadMs = ms; }
+    void setTranscode(double ms) { _transcodeMs = ms; }
+    void setSerialize(double ms) { _serializeMs = ms; }
+    void setReadback(double ms) { _readbackMs = ms; }
 
 private:
     bool _ok = false;
     std::string _error;
     double _durationMs = 0.0;
+    double _stageOpenMs = 0.0;
+    double _stageFlattenMs = 0.0;
+    double _exportDispatchMs = 0.0;
+    double _pluginReadMs = 0.0;
+    double _transcodeMs = 0.0;
+    double _serializeMs = 0.0;
+    double _readbackMs = 0.0;
     std::vector<uint8_t> _data;
 };
 
@@ -185,32 +213,67 @@ convertWithOptions(const std::string& inputPath,
     auto result = std::make_unique<ConvertResult>();
     const auto started = std::chrono::steady_clock::now();
 
+    const auto stageOpenStarted = std::chrono::steady_clock::now();
     UsdStageRefPtr stage = UsdStage::Open(inputPath);
+    const auto stageOpenFinished = std::chrono::steady_clock::now();
+    result->setStageOpen(
+      std::chrono::duration<double, std::milli>(stageOpenFinished - stageOpenStarted).count());
     if (!stage) {
         result->setError("Could not open '" + inputPath +
                          "' as a USD stage. The file may be corrupt or not a USD asset.");
         return result;
     }
-    // Dispatches to UsdGltfFileFormat::WriteToFile through SdfFileFormat, which is only
-    // reachable because the plugin registered itself from its static initialisers.
+
+    const auto flattenStarted = std::chrono::steady_clock::now();
+    SdfLayerRefPtr flattenedLayer = stage->Flatten(false);
+    const auto flattenFinished = std::chrono::steady_clock::now();
+    result->setStageFlatten(
+      std::chrono::duration<double, std::milli>(flattenFinished - flattenStarted).count());
+    if (!flattenedLayer) {
+        result->setError("OpenUSD could not flatten '" + inputPath + "'.");
+        return result;
+    }
+
     SdfLayer::FileFormatArguments arguments;
     arguments["embedImages"] = "true";
     arguments["useMaterialExtensions"] = "true";
     arguments["optimizeMeshes"] = optimizeMeshes ? "true" : "false";
     arguments["meshoptCompression"] = meshoptCompression ? "true" : "false";
     arguments["embedTextures"] = embedTextures ? "true" : "false";
-    if (!stage->Export(outputPath, false, arguments)) {
+    const auto exportStarted = std::chrono::steady_clock::now();
+    const bool exported = flattenedLayer->Export(outputPath, std::string(), arguments);
+    const auto exportFinished = std::chrono::steady_clock::now();
+    result->setExportDispatch(
+      std::chrono::duration<double, std::milli>(exportFinished - exportStarted).count());
+    if (!exported) {
         result->setError("USD could not export '" + inputPath + "' to '" + outputPath +
                          "'. Is the requested file format plugin registered?");
         return result;
     }
 
+#if defined(USD_WEB_GLTF_BACKEND)
+    const adobe::usd::ExportTiming pluginTiming = adobe::usd::getLastExportTiming();
+    result->setPluginRead(pluginTiming.readLayerMs);
+    result->setTranscode(pluginTiming.transcodeMs);
+    result->setSerialize(pluginTiming.writeMs);
+#elif defined(USD_WEB_BABYLON_BACKEND)
+    const usd_web::babylon::FileFormatTiming pluginTiming =
+      usd_web::babylon::getLastFileFormatTiming();
+    result->setPluginRead(pluginTiming.readLayerMs);
+    result->setTranscode(pluginTiming.meshPreparationMs);
+    result->setSerialize(pluginTiming.serializationMs);
+#endif
+
+    const auto readbackStarted = std::chrono::steady_clock::now();
     std::vector<uint8_t> bytes;
     if (!readFile(outputPath, bytes)) {
         result->setError("The exporter reported success but '" + outputPath +
                          "' could not be read back.");
         return result;
     }
+    const auto readbackFinished = std::chrono::steady_clock::now();
+    result->setReadback(
+      std::chrono::duration<double, std::milli>(readbackFinished - readbackStarted).count());
     if (bytes.empty()) {
         result->setError("The exporter produced an empty file.");
         return result;
@@ -324,7 +387,14 @@ EMSCRIPTEN_BINDINGS(usd_web_gltf)
         .function("error", &ConvertResult::error)
         .function("dataPtr", &ConvertResult::dataPtr)
         .function("dataSize", &ConvertResult::dataSize)
-        .function("durationMs", &ConvertResult::durationMs);
+        .function("durationMs", &ConvertResult::durationMs)
+        .function("stageOpenMs", &ConvertResult::stageOpenMs)
+        .function("stageFlattenMs", &ConvertResult::stageFlattenMs)
+        .function("exportDispatchMs", &ConvertResult::exportDispatchMs)
+        .function("pluginReadMs", &ConvertResult::pluginReadMs)
+        .function("transcodeMs", &ConvertResult::transcodeMs)
+        .function("serializeMs", &ConvertResult::serializeMs)
+        .function("readbackMs", &ConvertResult::readbackMs);
 
     emscripten::function("convert", &convert);
     emscripten::function("convertWithOptions", &convertWithOptions);

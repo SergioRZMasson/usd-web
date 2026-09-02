@@ -1,8 +1,10 @@
 #include "webResolver.h"
 
+#include <exportTiming.h>
 #include <pxr/base/plug/registry.h>
 #include <pxr/usd/ar/resolver.h>
 #include <pxr/usd/sdf/fileFormat.h>
+#include <pxr/usd/sdf/layer.h>
 #include <pxr/usd/usd/stage.h>
 
 #include <json.hpp>
@@ -51,6 +53,17 @@ struct GlbStats
     uint64_t triangles = 0;
     uint64_t meshoptBufferViews = 0;
     uint64_t meshoptDecodedBytes = 0;
+};
+
+struct ConversionTiming
+{
+    double totalMs = 0.0;
+    double stageOpenMs = 0.0;
+    double stageFlattenMs = 0.0;
+    double exportDispatchMs = 0.0;
+    double pluginReadMs = 0.0;
+    double transcodeMs = 0.0;
+    double serializeMs = 0.0;
 };
 
 void
@@ -341,12 +354,25 @@ readGlbStats(const std::filesystem::path& path, GlbStats& stats, std::string& er
 }
 
 bool
-convert(const CliOptions& options, double& durationMs, std::string& error)
+convert(const CliOptions& options, ConversionTiming& timing, std::string& error)
 {
     const auto started = std::chrono::steady_clock::now();
+    const auto openStarted = std::chrono::steady_clock::now();
     const UsdStageRefPtr stage = UsdStage::Open(options.input.string());
+    const auto openFinished = std::chrono::steady_clock::now();
+    timing.stageOpenMs =
+      std::chrono::duration<double, std::milli>(openFinished - openStarted).count();
     if (!stage) {
         error = "Could not open input as a USD stage";
+        return false;
+    }
+    const auto flattenStarted = std::chrono::steady_clock::now();
+    const SdfLayerRefPtr flattened = stage->Flatten(false);
+    const auto flattenFinished = std::chrono::steady_clock::now();
+    timing.stageFlattenMs =
+      std::chrono::duration<double, std::milli>(flattenFinished - flattenStarted).count();
+    if (!flattened) {
+        error = "Could not flatten the USD stage";
         return false;
     }
 
@@ -365,13 +391,22 @@ convert(const CliOptions& options, double& durationMs, std::string& error)
         }
     }
 
-    if (!stage->Export(options.output.string(), false, arguments)) {
+    const auto exportStarted = std::chrono::steady_clock::now();
+    const bool exported = flattened->Export(options.output.string(), std::string(), arguments);
+    const auto exportFinished = std::chrono::steady_clock::now();
+    timing.exportDispatchMs =
+      std::chrono::duration<double, std::milli>(exportFinished - exportStarted).count();
+    if (!exported) {
         error = "USD failed to export the stage as GLB";
         return false;
     }
+    const adobe::usd::ExportTiming pluginTiming = adobe::usd::getLastExportTiming();
+    timing.pluginReadMs = pluginTiming.readLayerMs;
+    timing.transcodeMs = pluginTiming.transcodeMs;
+    timing.serializeMs = pluginTiming.writeMs;
 
     const auto finished = std::chrono::steady_clock::now();
-    durationMs = std::chrono::duration<double, std::milli>(finished - started).count();
+    timing.totalMs = std::chrono::duration<double, std::milli>(finished - started).count();
     return true;
 }
 
@@ -404,22 +439,22 @@ main(int argc, char** argv)
 
     std::string error;
     for (int i = 0; i < options.warmupIterations; ++i) {
-        double ignored = 0.0;
+        ConversionTiming ignored;
         if (!convert(options, ignored, error)) {
             std::cerr << error << '\n';
             return EXIT_FAILURE;
         }
     }
 
-    std::vector<double> durations;
-    durations.reserve(options.iterations);
+    std::vector<ConversionTiming> timings;
+    timings.reserve(options.iterations);
     for (int i = 0; i < options.iterations; ++i) {
-        double duration = 0.0;
-        if (!convert(options, duration, error)) {
+        ConversionTiming timing;
+        if (!convert(options, timing, error)) {
             std::cerr << error << '\n';
             return EXIT_FAILURE;
         }
-        durations.push_back(duration);
+        timings.push_back(timing);
     }
 
     GlbStats stats;
@@ -428,10 +463,18 @@ main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    const double total =
-      std::accumulate(durations.begin(), durations.end(), 0.0);
-    const double average = total / static_cast<double>(durations.size());
-    const auto [minimum, maximum] = std::minmax_element(durations.begin(), durations.end());
+    const auto averageTiming = [&](auto member) {
+        double total = 0.0;
+        for (const ConversionTiming& timing : timings) {
+            total += timing.*member;
+        }
+        return total / static_cast<double>(timings.size());
+    };
+    const double average = averageTiming(&ConversionTiming::totalMs);
+    const auto [minimum, maximum] = std::minmax_element(
+      timings.begin(), timings.end(), [](const ConversionTiming& left, const ConversionTiming& right) {
+          return left.totalMs < right.totalMs;
+      });
     const uintmax_t inputBytes = std::filesystem::file_size(options.input);
     const uintmax_t outputBytes = std::filesystem::file_size(options.output);
 
@@ -441,8 +484,14 @@ main(int argc, char** argv)
             { "output", options.output.string() },
             { "iterations", options.iterations },
             { "averageMs", average },
-            { "minimumMs", *minimum },
-            { "maximumMs", *maximum },
+            { "minimumMs", minimum->totalMs },
+            { "maximumMs", maximum->totalMs },
+            { "stageOpenMs", averageTiming(&ConversionTiming::stageOpenMs) },
+            { "stageFlattenMs", averageTiming(&ConversionTiming::stageFlattenMs) },
+            { "exportDispatchMs", averageTiming(&ConversionTiming::exportDispatchMs) },
+            { "pluginReadMs", averageTiming(&ConversionTiming::pluginReadMs) },
+            { "transcodeMs", averageTiming(&ConversionTiming::transcodeMs) },
+            { "serializeMs", averageTiming(&ConversionTiming::serializeMs) },
             { "inputBytes", inputBytes },
             { "outputBytes", outputBytes },
             { "nodes", stats.nodes },
@@ -461,8 +510,15 @@ main(int argc, char** argv)
     } else {
         std::cout << std::fixed << std::setprecision(1)
                   << "Converted " << options.input << " -> " << options.output << '\n'
-                  << "Time: " << average << " ms average (" << *minimum << '-' << *maximum
+                  << "Time: " << average << " ms average (" << minimum->totalMs << '-'
+                  << maximum->totalMs
                   << " ms), output: " << outputBytes << " bytes\n"
+                  << "Phases: open " << averageTiming(&ConversionTiming::stageOpenMs)
+                  << " ms, flatten " << averageTiming(&ConversionTiming::stageFlattenMs)
+                  << " ms, extract " << averageTiming(&ConversionTiming::pluginReadMs)
+                  << " ms, transcode " << averageTiming(&ConversionTiming::transcodeMs)
+                  << " ms, serialize " << averageTiming(&ConversionTiming::serializeMs)
+                  << " ms\n"
                   << "Geometry: " << stats.meshes << " meshes, " << stats.meshInstances
                   << " instances, " << stats.vertices << " vertices, " << stats.triangles
                   << " triangles, " << stats.primitives << " draw primitives\n";

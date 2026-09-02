@@ -8,8 +8,21 @@
 
 #include <pxr/usd/sdf/layer.h>
 
+#include <chrono>
 #include <fstream>
 #include <sstream>
+
+namespace usd_web::babylon {
+namespace {
+thread_local FileFormatTiming g_lastFileFormatTiming;
+}
+
+FileFormatTiming
+getLastFileFormatTiming()
+{
+    return g_lastFileFormatTiming;
+}
+} // namespace usd_web::babylon
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -67,6 +80,8 @@ writeBabylon(const SdfLayer& layer,
              std::ostream& output,
              const SdfFileFormat::FileFormatArguments& args)
 {
+    const auto totalStarted = std::chrono::steady_clock::now();
+    usd_web::babylon::g_lastFileFormatTiming = {};
     bool optimizeMeshes = true;
     bool embedTextures = true;
     argReadBool(args, "optimizeMeshes", optimizeMeshes, "usdBabylon");
@@ -78,14 +93,32 @@ writeBabylon(const SdfLayer& layer,
     readOptions.ignoreInvisible = true;
 
     UsdData data;
+    const auto readStarted = std::chrono::steady_clock::now();
     if (!readLayer(readOptions, layer, data, "usdBabylon")) {
+        const auto failed = std::chrono::steady_clock::now();
+        usd_web::babylon::g_lastFileFormatTiming.readLayerMs =
+          std::chrono::duration<double, std::milli>(failed - readStarted).count();
+        usd_web::babylon::g_lastFileFormatTiming.totalMs =
+          std::chrono::duration<double, std::milli>(failed - totalStarted).count();
         return false;
     }
+    const auto readFinished = std::chrono::steady_clock::now();
+    usd_web::babylon::g_lastFileFormatTiming.readLayerMs =
+      std::chrono::duration<double, std::milli>(readFinished - readStarted).count();
 
     usd_web::babylon::ExportOptions exportOptions;
     exportOptions.optimizeMeshes = optimizeMeshes;
     exportOptions.embedTextures = embedTextures;
-    return usd_web::babylon::exportScene(exportOptions, data, output);
+    usd_web::babylon::ExportPhaseTiming exportTiming;
+    const bool result =
+      usd_web::babylon::exportScene(exportOptions, data, output, &exportTiming);
+    const auto finished = std::chrono::steady_clock::now();
+    usd_web::babylon::g_lastFileFormatTiming.meshPreparationMs =
+      exportTiming.meshPreparationMs;
+    usd_web::babylon::g_lastFileFormatTiming.serializationMs = exportTiming.serializationMs;
+    usd_web::babylon::g_lastFileFormatTiming.totalMs =
+      std::chrono::duration<double, std::milli>(finished - totalStarted).count();
+    return result;
 }
 
 } // namespace

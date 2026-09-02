@@ -223,6 +223,52 @@ instances instead of thousands of glTF primitive meshes. The comparison demo rep
 browser conversion and Babylon loading time for both choices. The private sample files are
 not part of the repository.
 
+### OpenUSD and exporter phase timing
+
+Every conversion reports nested and exclusive timings:
+
+|Field|Measured work|
+|---|---|
+|`stageOpenMs`|`UsdStage::Open`: package/layer I/O and initial composition|
+|`stageFlattenMs`|`UsdStage::Flatten`: materialize the composed stage into one layer|
+|`pluginReadMs`|Translate the flattened USD layer into `UsdData`|
+|`transcodeMs`|GLB model construction/compression or Babylon mesh preparation|
+|`serializeMs`|Write GLB or streaming Babylon JSON|
+|`readbackMs`|Copy the completed output from Emscripten FS|
+|`exportDispatchMs`|Inclusive Sdf plugin call containing read, transcode, and serialization|
+|`heapCopyMs`|Copy the native result vector from wasm memory into JavaScript|
+
+Do not add `exportDispatchMs` to its child fields. `durationMs` is the end-to-end native call
+plus heap copy; `nativeDurationMs` excludes only the heap-to-JavaScript copy.
+
+|Input|Backend|Total|Stage open|Flatten|Plugin read|Transcode|Serialize|
+|---|---|---:|---:|---:|---:|---:|---:|
+|botsinbox|GLB|1,037 ms|498 ms|354 ms|26 ms|139 ms|19 ms|
+|botsinbox|Babylon|1,110 ms|496 ms|350 ms|28 ms|98 ms|135 ms|
+|botsinbox 2|GLB|679 ms|422 ms|126 ms|17 ms|99 ms|14 ms|
+|botsinbox 2|Babylon|723 ms|414 ms|125 ms|18 ms|74 ms|91 ms|
+
+OpenUSD stage open plus flatten accounts for **76–82%** of these conversions. Exporter work
+is only 18–24%, so optimizing the current transcoder alone has a hard ceiling. A larger gain
+requires avoiding the flattened-layer round trip and extracting the needed runtime data
+directly from the composed `UsdStage`.
+
+For comparison, a private TypeScript adapter built on `@openusd-wasm/pxr` was run against
+the same USDZ packages without copying its source into this repository:
+
+|Input|Total|Stage open|Triangulation calls|Meshes|Vertices|Triangles|
+|---|---:|---:|---:|---:|---:|---:|
+|botsinbox|7,018 ms|3,943 ms|84 ms|42|531,726|177,242|
+|botsinbox 2|9,828 ms|2,326 ms|229 ms|28|1,413,552|471,184|
+
+That adapter is not replacing OpenUSD; it calls OpenUSD through Embind and then constructs
+Babylon meshes directly. It avoids flattening and output serialization, but pays heavily for
+per-prim JS/Wasm calls, typed-array copying, JavaScript matrix/CPU-skinning loops, and repeated
+material-graph searches. Its smaller first result is primarily missing scene content: it
+does not traverse USD instance proxies, stops recursion at mesh prims, and simplifies
+materials/subsets and animation. On the second asset it produces 3.6× more vertices than the
+optimized C++ path.
+
 ### How the dependencies are wired
 
 | Piece | Where it comes from | How it is pinned |

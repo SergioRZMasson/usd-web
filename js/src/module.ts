@@ -16,6 +16,13 @@ export interface NativeConvertResult extends EmbindObject {
     dataPtr(): number;
     dataSize(): number;
     durationMs(): number;
+    stageOpenMs(): number;
+    stageFlattenMs(): number;
+    exportDispatchMs(): number;
+    pluginReadMs(): number;
+    transcodeMs(): number;
+    serializeMs(): number;
+    readbackMs(): number;
 }
 
 /** The Emscripten module instance. */
