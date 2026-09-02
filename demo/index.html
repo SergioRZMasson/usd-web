@@ -97,6 +97,24 @@
     }
     #drop.active { display: grid; }
 
+    #loading {
+        position: absolute; inset: 0; z-index: 3; display: none; place-items: center;
+        background: rgba(9, 9, 13, .76); backdrop-filter: blur(3px);
+    }
+    #loading.active { display: grid; }
+    .loading-card {
+        min-width: 240px; max-width: min(80%, 420px); padding: 22px 26px;
+        border: 1px solid var(--border); border-radius: 12px;
+        background: rgba(30, 30, 36, .96); text-align: center;
+        box-shadow: 0 18px 60px rgba(0, 0, 0, .35);
+    }
+    .loading-spinner {
+        width: 34px; height: 34px; margin: 0 auto 14px;
+        border: 3px solid #34343e; border-top-color: var(--accent); border-radius: 50%;
+        animation: spin .8s linear infinite;
+    }
+    #loadingMessage { color: var(--muted); font-size: 12px; margin-top: 5px; }
+
     @media (max-width: 860px) {
         #app { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
         #sidebar { border-left: 0; border-top: 1px solid var(--border); max-height: 45vh; }
@@ -109,6 +127,13 @@
     <div id="viewport">
         <canvas id="canvas"></canvas>
         <div id="drop">Drop a USD file to convert</div>
+        <div id="loading" class="active" role="status" aria-live="polite" aria-busy="true">
+            <div class="loading-card">
+                <div class="loading-spinner"></div>
+                <strong>Preparing model</strong>
+                <div id="loadingMessage">Starting conversion worker...</div>
+            </div>
+        </div>
     </div>
 
     <aside id="sidebar">

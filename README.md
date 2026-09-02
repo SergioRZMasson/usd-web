@@ -96,7 +96,15 @@ Cross-Origin-Embedder-Policy: require-corp
 ```
 
 Conversion is CPU-bound and synchronous once it starts, so run it in a Web Worker if the
-main thread must stay responsive.
+main thread must stay responsive. The comparison demo does this by transferring the selected
+USD files into a dedicated module worker. The worker retains the source for GLB/Babylon
+re-conversion and transfers only the completed intermediate buffer back to the UI.
+
+While conversion and Babylon loading are in progress, the viewport displays an animated
+loading overlay. Because OpenUSD and the exporter execute in the worker, rendering, spinner
+animation, input events, and browser painting continue during the native conversion. A
+large botsinbox browser run delivered 68 animation frames during a 1.04-second conversion;
+the longest observed frame gap was 133 ms rather than the full conversion duration.
 
 ---
 

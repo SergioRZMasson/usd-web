@@ -16,6 +16,7 @@ import CopyPlugin from 'copy-webpack-plugin';
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, '..');
 const siteDir = resolve(projectRoot, 'docs');
+const converterBundle = resolve(projectRoot, 'js', 'dist', 'index.js');
 
 // The Emscripten glue, the wasm binary and the resource bundle are produced by the js
 // package's build (npm --prefix ../js run build). They must ship next to app.js: the glue
@@ -26,6 +27,9 @@ if (!existsSync(wasmSourceDir)) {
         `WebAssembly artifacts not found at ${wasmSourceDir}.\n` +
             'Build the package first:  npm --prefix ../js run build',
     );
+}
+if (!existsSync(converterBundle)) {
+    throw new Error(`Converter bundle not found at ${converterBundle}. Run npm --prefix ../js run build first.`);
 }
 
 // `--watch` rebuilds docs/ on change; serve.mjs serves it. A production build is minified
@@ -88,6 +92,8 @@ export default {
         new CopyPlugin({
             patterns: [
                 { from: resolve(here, 'index.html'), to: 'index.html' },
+                { from: resolve(here, 'src', 'conversionWorker.js'), to: 'conversionWorker.js' },
+                { from: converterBundle, to: 'usd-web.js' },
                 // Ship the prebuilt Emscripten artifacts verbatim. `info.minimized` stops
                 // webpack's production Terser pass from re-minifying the glue .js, which is
                 // already optimized by Emscripten and must not be altered.

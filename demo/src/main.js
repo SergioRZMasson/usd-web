@@ -4,8 +4,6 @@
  * Flow: USD bytes -> independently-linked GLB or .babylon wasm exporter -> Babylon.js.
  */
 
-import { UsdConverter } from 'usd-web-gltf';
-
 // Deep imports rather than the "@babylonjs/core" barrel: the barrel defeats tree shaking
 // and roughly doubles the bundle, which matters because docs/ is committed.
 import { Engine } from '@babylonjs/core/Engines/engine.js';
@@ -41,6 +39,8 @@ const els = {
     stats: document.getElementById('stats'),
     canvas: document.getElementById('canvas'),
     drop: document.getElementById('drop'),
+    loading: document.getElementById('loading'),
+    loadingMessage: document.getElementById('loadingMessage'),
 };
 const requestedFormat = new URLSearchParams(location.search).get('format');
 if (requestedFormat === 'glb' || requestedFormat === 'babylon') {
@@ -60,6 +60,21 @@ function log(message, level = 'info') {
 function setStatus(text, busy = false) {
     els.status.textContent = text;
     els.status.classList.toggle('busy', busy);
+}
+
+function showLoading(message) {
+    els.loadingMessage.textContent = message;
+    els.loading.setAttribute('aria-busy', 'true');
+    els.loading.classList.add('active');
+}
+
+function updateLoading(message) {
+    els.loadingMessage.textContent = message;
+}
+
+function hideLoading() {
+    els.loading.classList.remove('active');
+    els.loading.setAttribute('aria-busy', 'false');
 }
 
 const formatBytes = (n) =>
@@ -201,52 +216,103 @@ function frameScene(meshes) {
 // --- converter -------------------------------------------------------------
 
 const initialBackend = els.intermediate.value === 'babylon' ? 'babylon' : 'gltf';
-setStatus(`Loading ${initialBackend === 'gltf' ? 'GLB' : '.babylon'} exporter (WebAssembly)…`, true);
+let conversionWorker = null;
+let lastLoad = null;
+const workerRequests = new Map();
+let nextWorkerRequestId = 1;
 
-const converters = new Map();
+function handleWorkerMessage(event) {
+    const message = event.data;
+    const request = workerRequests.get(message.requestId);
+    if (!request) return;
 
-async function getConverter(backend) {
-    if (converters.has(backend)) return converters.get(backend);
+    if (message.type === 'progress') {
+        updateLoading(message.message);
+        return;
+    }
+    if (message.type === 'log') {
+        if (message.entry.level !== 'info') {
+            log(message.entry.message, message.entry.level);
+        }
+        return;
+    }
 
-    const pending = UsdConverter.create({
-        backend,
-        onLog: (m) => m.level !== 'info' && log(m.message, m.level),
-    });
-    converters.set(backend, pending);
-    try {
-        const converter = await pending;
-        converters.set(backend, converter);
-        const label = backend === 'gltf' ? 'GLB' : '.babylon';
-        log(
-            `${label} module: OpenUSD ${converter.info.usdVersion}; ` +
-                `formats ${converter.info.supportedOutputFormats.join(', ')}`,
-        );
-        return converter;
-    } catch (error) {
-        converters.delete(backend);
-        throw error;
+    workerRequests.delete(message.requestId);
+    if (message.type === 'error') {
+        const error = new Error(message.error.message);
+        error.name = message.error.name;
+        error.stack = message.error.stack;
+        request.reject(error);
+    } else {
+        request.resolve(message);
     }
 }
+
+function handleWorkerFailure(event) {
+    const error = event.error ?? new Error(event.message || 'Conversion worker failed.');
+    for (const request of workerRequests.values()) {
+        request.reject(error);
+    }
+    workerRequests.clear();
+    conversionWorker?.terminate();
+    conversionWorker = null;
+    lastLoad = null;
+    hideLoading();
+    setBusy(false);
+    setStatus('Conversion worker stopped. Select the asset again.');
+    log(error.message, 'error');
+}
+
+function ensureWorker() {
+    if (conversionWorker) return conversionWorker;
+
+    conversionWorker = new Worker(new URL('./conversionWorker.js', import.meta.url), {
+        type: 'module',
+    });
+    conversionWorker.addEventListener('message', handleWorkerMessage);
+    conversionWorker.addEventListener('error', handleWorkerFailure);
+    conversionWorker.addEventListener('messageerror', handleWorkerFailure);
+    return conversionWorker;
+}
+
+addEventListener('beforeunload', () => conversionWorker?.terminate());
+
+function requestWorker(type, payload, transfer = []) {
+    const requestId = nextWorkerRequestId++;
+    return new Promise((resolve, reject) => {
+        workerRequests.set(requestId, { resolve, reject });
+        try {
+            ensureWorker().postMessage({ type, requestId, ...payload }, transfer);
+        } catch (error) {
+            workerRequests.delete(requestId);
+            reject(error);
+        }
+    });
+}
+
+async function initializeBackend(backend) {
+    const { info } = await requestWorker('initialize', { backend });
+    const label = backend === 'gltf' ? 'GLB' : '.babylon';
+    log(`${label} worker: OpenUSD ${info.usdVersion}; formats ${info.supportedOutputFormats.join(', ')}`);
+    return info;
+}
+
+setStatus(`Loading ${initialBackend === 'gltf' ? 'GLB' : '.babylon'} exporter worker…`, true);
+showLoading('Starting conversion worker...');
 
 try {
-    await getConverter(initialBackend);
+    const info = await initializeBackend(initialBackend);
+    setStatus(`Ready — OpenUSD ${info.usdVersion}`);
+    log(`Asset resolver: ${info.resolver}`);
+    hideLoading();
+    setBusy(false);
 } catch (error) {
-    setStatus('Failed to load the WebAssembly module.');
+    setStatus('Failed to load the conversion worker.');
+    updateLoading('The conversion worker could not start.');
     log(String(error), 'error');
-    if (!globalThis.crossOriginIsolated) {
-        log(
-            'crossOriginIsolated is false — the page needs COOP/COEP headers. ' +
-                'Use `npm start`, which serves them.',
-            'error',
-        );
-    }
-    throw error;
+    hideLoading();
+    setBusy(false);
 }
-
-const info = (await getConverter(initialBackend)).info;
-setStatus(`Ready — OpenUSD ${info.usdVersion}`);
-log(`Asset resolver: ${info.resolver}`);
-setBusy(false);
 
 // --- conversion ------------------------------------------------------------
 
@@ -256,7 +322,6 @@ setBusy(false);
 // statistics. Large assets take seconds to convert, so that window is easy to hit.
 let loadGeneration = 0;
 let pendingLoad = Promise.resolve();
-let lastLoad = null;
 
 function setBusy(busy) {
     els.file.disabled = busy;
@@ -266,34 +331,52 @@ function setBusy(busy) {
 }
 
 async function loadUsd(bytes, fileName, additionalFiles = undefined) {
-    lastLoad = { bytes, fileName, additionalFiles };
+    const asset = {
+        bytes,
+        fileName,
+        additionalFiles,
+        sourceByteLength: bytes.byteLength,
+    };
+    lastLoad = { fileName, sourceByteLength: bytes.byteLength };
     const generation = ++loadGeneration;
 
     // Chain onto whatever is in flight so two loads never overlap, and keep the chain alive
     // if one of them fails.
     const run = pendingLoad.then(
-        () => runLoad(generation, bytes, fileName, additionalFiles),
-        () => runLoad(generation, bytes, fileName, additionalFiles),
+        () => runLoad(generation, asset),
+        () => runLoad(generation, asset),
     );
     pendingLoad = run.catch(() => undefined);
     return run;
 }
 
-async function runLoad(generation, bytes, fileName, additionalFiles) {
+async function reconvertLastUsd() {
+    if (!lastLoad) return;
+    const generation = ++loadGeneration;
+    const run = pendingLoad.then(
+        () => runLoad(generation, null),
+        () => runLoad(generation, null),
+    );
+    pendingLoad = run.catch(() => undefined);
+    return run;
+}
+
+async function runLoad(generation, asset) {
     // A newer request arrived while this one was queued, so this result would be thrown away
     // the moment it landed. Skip the work entirely.
     if (generation !== loadGeneration) return;
 
     els.log.replaceChildren();
     els.stats.replaceChildren();
+    const fileName = asset?.fileName ?? lastLoad.fileName;
+    const sourceByteLength = asset?.sourceByteLength ?? lastLoad.sourceByteLength;
     setStatus(`Converting ${fileName}…`, true);
+    showLoading(`Preparing ${fileName}...`);
     setBusy(true);
 
     const intermediate = els.intermediate.value;
     const backend = intermediate === 'babylon' ? 'babylon' : 'gltf';
-    let converter;
     try {
-        converter = await getConverter(backend);
         const started = performance.now();
         const {
             data,
@@ -307,11 +390,38 @@ async function runLoad(generation, bytes, fileName, additionalFiles) {
             stageFlattenMs,
             stageOpenMs,
             transcodeMs,
-        } = await converter.convert(bytes, {
-            fileName,
-            additionalFiles,
-            format: intermediate,
-        });
+        } = (
+            await requestWorker(
+                'convert',
+                {
+                    backend,
+                    format: intermediate,
+                    asset: asset
+                        ? {
+                              bytes: asset.bytes,
+                              fileName,
+                              additionalFiles: asset.additionalFiles,
+                          }
+                        : undefined,
+                },
+                asset
+                    ? [
+                          ...new Set([
+                              asset.bytes.buffer,
+                              ...Object.values(asset.additionalFiles ?? {}).map(
+                                  (file) => file.buffer,
+                              ),
+                          ]),
+                      ]
+                    : [],
+            )
+        ).result;
+        if (asset) {
+            lastLoad = {
+                fileName: asset.fileName,
+                sourceByteLength: asset.sourceByteLength,
+            };
+        }
         const convertMs = performance.now() - started;
 
         if (generation !== loadGeneration) return;
@@ -330,6 +440,7 @@ async function runLoad(generation, bytes, fileName, additionalFiles) {
             );
         }
 
+        updateLoading(`Loading ${intermediateLabel} into Babylon.js...`);
         const loadStarted = performance.now();
         const container =
             intermediate === 'babylon'
@@ -360,7 +471,7 @@ async function runLoad(generation, bytes, fileName, additionalFiles) {
         const triangles = meshes.reduce((sum, m) => sum + (m.getTotalIndices() / 3 || 0), 0);
 
         renderStats([
-            ['Source', `${fileName} · ${formatBytes(bytes.byteLength)}`],
+            ['Source', `${fileName} · ${formatBytes(sourceByteLength)}`],
             [intermediateLabel, formatBytes(data.byteLength)],
             ['OpenUSD open', `${stageOpenMs.toFixed(0)} ms`],
             ['OpenUSD flatten', `${stageFlattenMs.toFixed(0)} ms`],
@@ -390,25 +501,13 @@ async function runLoad(generation, bytes, fileName, additionalFiles) {
         setStatus('Conversion failed.');
         log(String(error?.message ?? error), 'error');
         console.error(error);
-
-        // OpenUSD treats some malformed input as fatal, which terminates the wasm
-        // runtime. The instance is unusable afterwards, so a fresh one is created.
-        if (converter?.aborted) {
-            log('The WebAssembly runtime aborted. Reloading the module…', 'warning');
-            setStatus('Reloading module…', true);
-            try {
-                converters.delete(backend);
-                const replacement = await getConverter(backend);
-                setStatus(`Ready — OpenUSD ${replacement.info.usdVersion}`);
-            } catch (reloadError) {
-                setStatus('The WebAssembly module could not be reloaded. Refresh the page.');
-                log(String(reloadError?.message ?? reloadError), 'error');
-            }
-        }
     } finally {
         // Leave the controls disabled if a newer load is already queued behind this one;
         // that load re-enables them when it settles.
-        if (generation === loadGeneration) setBusy(false);
+        if (generation === loadGeneration) {
+            hideLoading();
+            setBusy(false);
+        }
     }
 }
 
@@ -426,16 +525,22 @@ function renderStats(rows) {
 
 els.intermediate.addEventListener('change', async () => {
     if (lastLoad) {
-        await loadUsd(lastLoad.bytes, lastLoad.fileName, lastLoad.additionalFiles);
+        await reconvertLastUsd();
     } else {
         const backend = els.intermediate.value === 'babylon' ? 'babylon' : 'gltf';
-        setStatus(`Loading ${backend === 'gltf' ? 'GLB' : '.babylon'} exporter…`, true);
+        const label = backend === 'gltf' ? 'GLB' : '.babylon';
+        setStatus(`Loading ${label} exporter worker…`, true);
+        showLoading(`Loading the ${label} exporter...`);
+        setBusy(true);
         try {
-            const converter = await getConverter(backend);
-            setStatus(`Ready — OpenUSD ${converter.info.usdVersion}`);
+            const info = await initializeBackend(backend);
+            setStatus(`Ready — OpenUSD ${info.usdVersion}`);
         } catch (error) {
             setStatus('Failed to load the selected exporter.');
             log(String(error?.message ?? error), 'error');
+        } finally {
+            hideLoading();
+            setBusy(false);
         }
     }
 });
