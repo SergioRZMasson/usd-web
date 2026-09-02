@@ -2,10 +2,11 @@
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "usd-web-gltf",
   "version": "0.1.0",
-  "description": "OpenUSD and the optimized usdGltf fork compiled for native and WebAssembly runtimes.",
+  "description": "OpenUSD with separate optimized GLB and Babylon JSON exporter modules.",
   "homepage": "https://github.com/SergioRZMasson/usd-web",
   "builtin-baseline": "9885cff3673359c51faa080e1252925c203b9f34",
   "dependencies": [
+    "nlohmann-json",
     "usd"
   ]
 }

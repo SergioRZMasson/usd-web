@@ -8,7 +8,7 @@
  * directly, so USD support costs nothing beyond the conversion itself.
  */
 
-import { usdToGlb } from './index.js';
+import { getSharedConverter } from './index.js';
 import type { BinaryInput, ConvertOptions } from './types.js';
 
 /** Result of {@link loadUsdIntoScene}. */
@@ -17,8 +17,10 @@ export interface LoadedUsdAsset<TResult> {
     result: TResult;
     /** Duration of the USD to GLB conversion, in milliseconds. */
     conversionMs: number;
-    /** Size of the intermediate GLB, in bytes. */
+    /** Size of the intermediate GLB, or zero when another format was selected. */
     glbByteLength: number;
+    /** Size of the selected GLB or .babylon intermediate payload. */
+    intermediateByteLength: number;
 }
 
 /** Options for {@link loadUsdIntoScene}. */
@@ -33,14 +35,14 @@ export interface LoadUsdOptions extends ConvertOptions {
      * It receives the GLB bytes, the scene, and options carrying `pluginExtension`.
      */
     load: (
-        source: Uint8Array,
+        source: Uint8Array | string,
         scene: unknown,
         options: { pluginExtension: string },
     ) => Promise<unknown>;
 }
 
 /**
- * Converts a USD asset and hands the resulting GLB to Babylon.
+ * Converts a USD asset and hands the selected intermediate format to Babylon.
  *
  * The bytes are passed straight through: Babylon's `SceneSource` accepts an
  * `ArrayBufferView`, so no blob URL is created and nothing needs revoking.
@@ -69,13 +71,26 @@ export async function loadUsdIntoScene<TResult = unknown>(
     options: LoadUsdOptions,
 ): Promise<LoadedUsdAsset<TResult>> {
     const { load, ...convertOptions } = options;
+    const format = convertOptions.format ?? 'glb';
+    const backend = format === 'babylon' ? 'babylon' : 'gltf';
+    const converter = await getSharedConverter({ backend });
 
     const started = Date.now();
-    const glb = await usdToGlb(input, convertOptions);
+    const converted = await converter.convert(input, { ...convertOptions, format });
     const conversionMs = Date.now() - started;
 
-    // '.glb' is required: the loader has no filename to infer the format from.
-    const result = (await load(glb, scene, { pluginExtension: '.glb' })) as TResult;
+    const source =
+        format !== 'glb'
+            ? `data:${new TextDecoder().decode(converted.data)}`
+            : converted.data;
+    const result = (await load(source, scene, {
+        pluginExtension: `.${format}`,
+    })) as TResult;
 
-    return { result, conversionMs, glbByteLength: glb.byteLength };
+    return {
+        result,
+        conversionMs,
+        glbByteLength: format === 'glb' ? converted.data.byteLength : 0,
+        intermediateByteLength: converted.data.byteLength,
+    };
 }

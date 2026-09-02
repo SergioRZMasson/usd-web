@@ -33,6 +33,9 @@
     "./wasm": {
       "default": "./dist/wasm/usd-web-gltf.wasm"
     },
+    "./wasm/babylon": {
+      "default": "./dist/wasm/usd-web-babylon.wasm"
+    },
     "./package.json": "./package.json"
   },
   "files": [

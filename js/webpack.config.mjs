@@ -6,10 +6,8 @@
 // Type declarations are emitted separately by `tsc -p tsconfig.build.json` (npm run
 // build:types), which the `build` script runs before webpack.
 //
-// The Emscripten glue (./wasm/usd-web-gltf.js) is never bundled: it is imported at runtime
-// through a dynamic import() carrying a `webpackIgnore` magic comment (see src/glue.ts), so
-// webpack leaves that import verbatim. The accompanying .wasm/.data artifacts are copied out
-// of the native build folder by CopyWebpackPlugin below.
+// The two Emscripten glue modules are never bundled: src/glue.ts dynamically imports the
+// selected backend with webpackIgnore. Their .wasm/.data artifacts are copied below.
 
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -27,14 +25,21 @@ const wasmSourceDir = process.env.USD_WEB_GLTF_BIN
     ? resolve(process.env.USD_WEB_GLTF_BIN)
     : resolve(here, '..', 'build', 'wasm', 'bin');
 
-const WASM_ARTIFACTS = ['usd-web-gltf.js', 'usd-web-gltf.wasm', 'usd-web-gltf.data'];
+const WASM_ARTIFACTS = [
+    'usd-web-gltf.js',
+    'usd-web-gltf.wasm',
+    'usd-web-gltf.data',
+    'usd-web-babylon.js',
+    'usd-web-babylon.wasm',
+    'usd-web-babylon.data',
+];
 
 if (!existsSync(wasmSourceDir)) {
     throw new Error(
         `WebAssembly build output not found at ${wasmSourceDir}.\n` +
             'Build the wasm module first — from the repository root run:\n' +
             '  cmake --workflow --preset wasm\n' +
-            'or set USD_WEB_GLTF_BIN to a directory holding usd-web-gltf.{js,wasm,data}.',
+            'or set USD_WEB_GLTF_BIN to a directory holding both exporter modules.',
     );
 }
 

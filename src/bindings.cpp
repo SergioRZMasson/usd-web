@@ -176,7 +176,8 @@ std::unique_ptr<ConvertResult>
 convertWithOptions(const std::string& inputPath,
                    const std::string& outputPath,
                    bool optimizeMeshes,
-                   bool meshoptCompression)
+                   bool meshoptCompression,
+                   bool embedTextures)
 {
     ensureResolver();
     diagnosticDelegate();
@@ -197,9 +198,10 @@ convertWithOptions(const std::string& inputPath,
     arguments["useMaterialExtensions"] = "true";
     arguments["optimizeMeshes"] = optimizeMeshes ? "true" : "false";
     arguments["meshoptCompression"] = meshoptCompression ? "true" : "false";
+    arguments["embedTextures"] = embedTextures ? "true" : "false";
     if (!stage->Export(outputPath, false, arguments)) {
         result->setError("USD could not export '" + inputPath + "' to '" + outputPath +
-                         "'. Is the glTF file format plugin registered?");
+                         "'. Is the requested file format plugin registered?");
         return result;
     }
 
@@ -224,7 +226,7 @@ convertWithOptions(const std::string& inputPath,
 std::unique_ptr<ConvertResult>
 convert(const std::string& inputPath, const std::string& outputPath)
 {
-    return convertWithOptions(inputPath, outputPath, true, true);
+    return convertWithOptions(inputPath, outputPath, true, true, true);
 }
 
 void
@@ -251,6 +253,12 @@ bool
 isGltfPluginAvailable()
 {
     return SdfFileFormat::FindByExtension("glb") != nullptr;
+}
+
+bool
+isBabylonPluginAvailable()
+{
+    return SdfFileFormat::FindByExtension("babylon") != nullptr;
 }
 
 std::string
@@ -323,6 +331,7 @@ EMSCRIPTEN_BINDINGS(usd_web_gltf)
     emscripten::function("setLogCallback", &setLogCallback);
     emscripten::function("getSupportedOutputFormats", &getSupportedOutputFormats);
     emscripten::function("isGltfPluginAvailable", &isGltfPluginAvailable);
+    emscripten::function("isBabylonPluginAvailable", &isBabylonPluginAvailable);
     emscripten::function("getUsdVersion", &getUsdVersion);
 
     emscripten::function("registerAssetDirectory", &registerAssetDirectory);

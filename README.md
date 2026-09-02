@@ -1,13 +1,16 @@
 # usd-web
 
-**OpenUSD and Adobe's `usdGltf` plugin, compiled to WebAssembly.** Converts USD
-(`.usd`, `.usda`, `.usdc`, `.usdz`) to glTF/GLB entirely in the browser, so the result can
-be handed to any glTF-capable renderer — Babylon.js, three.js, `<model-viewer>`.
+**OpenUSD with independently linked GLB and Babylon JSON exporters, compiled to
+WebAssembly.** Converts USD (`.usd`, `.usda`, `.usdc`, `.usdz`) in the browser and lets the
+demo switch the intermediate format at runtime for direct size and timing comparisons.
 
 ```ts
-import { usdToGlb } from "usd-web-gltf";
+import { UsdConverter, usdToGlb } from "usd-web-gltf";
 
 const glb = await usdToGlb(await file.arrayBuffer(), { fileName: file.name });
+
+const babylonConverter = await UsdConverter.create({ backend: "babylon" });
+const babylon = await babylonConverter.convert(bytes, { fileName: file.name });
 ```
 
 **[▶ Live demo](https://sergiorzmasson.github.io/usd-web/)** — drop in a USD file and see
@@ -26,12 +29,13 @@ it rendered.
 
 USD is the interchange format the industry is standardising on, but it is not a web format:
 the spec is enormous and most of it has no meaning in a browser. glTF is the web format, and
-Adobe already maintain a high-quality USD→glTF translator in
+Adobe maintain a high-quality USD→glTF translator in
 [USD-Fileformat-plugins](https://github.com/adobe/USD-Fileformat-plugins).
 
-This project makes that translator run in the browser. It does **not** reimplement the
-conversion — it compiles Adobe's plugin as a real USD file format plugin and lets OpenUSD
-dispatch to it, exactly as a desktop USD installation would.
+This project makes that translator run in the browser and also includes an export-only
+`.babylon` file format plugin. Both use the same composed `UsdData`, lossless vertex welding,
+triangle ordering, asset resolver, and OpenUSD build. They are emitted as separate wasm
+modules so their plugin cost can be measured independently.
 
 ### The key finding: USD plugins work in WebAssembly
 
@@ -50,29 +54,29 @@ They are linked *statically* rather than loaded at runtime, and three things mus
    USD's default plugin search paths. Omit it and you get `No plugin search paths` and a
    stage that will not open.
 
-Verified at runtime:
+Verified at runtime for the two isolated modules:
 
 ```
 OpenUSD version : 0.26.5
 Output formats  : glb,gltf,usd,usda,usdc,usdz
 glTF plugin     : REGISTERED
+
+Babylon output formats : babylon,usd,usda,usdc,usdz
+Babylon plugin         : REGISTERED
 ```
 
 ## Size
 
-Release build, OpenUSD 26.05, no imaging, no Python, single-threaded:
+Release SIMD/LTO build, OpenUSD 26.05, no imaging, no Python, single-threaded:
 
-| Artifact | Raw | gzip | brotli |
+| Exporter module | Raw | gzip -9 | brotli -11 |
 |---|---:|---:|---:|
-| `usd-web-gltf.wasm` | 12.00 MB | 3.02 MB | 1.87 MB |
-| `usd-web-gltf.data` (USD schemas & plugin manifests) | 0.79 MB | 0.14 MB | 0.10 MB |
-| `usd-web-gltf.js` (Emscripten glue) | 0.13 MB | 0.03 MB | 0.03 MB |
-| **Total** | **12.92 MB** | **3.19 MB** | **2.00 MB** |
+| `usd-web-gltf.wasm` | 10.69 MB | 2.85 MB | 1.79 MB |
+| `usd-web-babylon.wasm` | 9.79 MB | 2.57 MB | 1.61 MB |
 
-For reference, USD core alone — able to open a stage and read geometry, but with no glTF
-plugin — measures 10.86 MB raw / 1.62 MB brotli. **Adobe's entire importer *and* exporter
-therefore costs about 1.9 MB raw, 0.4 MB brotli.** OpenUSD itself is the cost; the
-converter is nearly free.
+The export-only Babylon plugin module is **0.89 MB (8.4%) smaller raw** and 0.18 MB smaller
+after maximum Brotli compression. Each module has its own roughly 0.76 MB USD resource
+bundle, containing only that exporter plugin's manifest.
 
 **Serve the `.wasm` with brotli.** It is the difference between 12 MB and 1.9 MB on the wire.
 
@@ -137,7 +141,7 @@ Either way the build:
    oneTBB and zlib that vcpkg also builds for wasm.
 2. **submodules → USD-Fileformat-plugins + tinygltf + meshoptimizer** — compiled in place from
    [`dependencies/`](dependencies).
-3. **this project** — the wasm module and its resource bundle.
+3. **this project** — independently linked GLB and Babylon wasm modules and resource bundles.
 
 A cold build takes roughly **30–60 minutes**, nearly all of it OpenUSD. vcpkg caches the
 result, so later builds are fast. Artifacts land in `build/wasm/bin`.
@@ -168,16 +172,20 @@ wasm-only for fast iteration.
 
 ### Native C++ CLI and private-asset benchmarks
 
-The same converter also builds as standard C++:
+Both exporters also build as standard C++:
 
 ```sh
 cmake --preset native
 cmake --build --preset native
 
-build/native/bin/usd-web-gltf-cli \
-  --meshopt-compression \
+build/native/bin/usd-web-babylon-cli \
   --iterations 5 \
   --asset-dir /path/to/asset-directory \
+  /path/to/input.usd \
+  /path/to/output.babylon
+
+build/native/bin/usd-web-gltf-cli \
+  --meshopt-compression \
   /path/to/input.usd \
   /path/to/output.glb
 ```
@@ -195,23 +203,25 @@ cmake --build --preset native
 ctest --test-dir build/native -L benchmark --output-on-failure
 ```
 
-Each baseline test disables mesh optimization. Each optimized test enables lossless mesh
-optimization and `EXT_meshopt_compression`; the CLI also decodes every compressed buffer
-view as a validity check and reports size, timing, vertex, triangle, primitive, and instance
-counts as JSON.
+CTest runs the GLB and Babylon exporters against every supplied input. Both report size,
+timing, vertex, triangle, and instance counts; the Babylon CLI additionally reports
+materials, skeletons, and transform nodes.
 
 On the two private robot scenes used to develop this path (one warm-up plus three measured
-Release conversions on Apple silicon), triangle and instance counts remained unchanged:
+Release conversions on Apple silicon), both exporters produced the same optimized vertex and
+triangle counts:
 
-|Input|Original GLB|Optimized GLB|Meshopt GLB|Vertices|Conversion, original → meshopt|
+|Input|Meshopt GLB|`.babylon` JSON|gzip GLB → JSON|Native export GLB → JSON|Wasm export GLB → JSON|
 |---|---:|---:|---:|---:|---:|
-|botsinbox|61.4 MB|21.6 MB|10.7 MB|1,805,526 → 554,439|510 ms → 607 ms|
-|botsinbox 2|40.5 MB|14.6 MB|8.2 MB|1,277,436 → 387,289|395 ms → 466 ms|
+|botsinbox|10.70 MB|40.77 MB|5.31 → 6.42 MB|607 → 660 ms|974 → 1,009 ms|
+|botsinbox 2|8.18 MB|29.04 MB|6.25 → 7.89 MB|466 → 490 ms|802 → 803 ms|
 
-The lossless optimization removes about 69% of stored vertices; meshopt reduces final GLB
-size by 80–83%. Encoding adds roughly 18–19% to conversion time for these inputs, trading a
-small one-time conversion cost for much lower network transfer, decode allocation, and GPU
-buffer upload costs. The sample USD files are intentionally not part of the repository.
+The streaming `.babylon` writer is close to GLB conversion speed and its JSON compresses
+well over HTTP, but the in-memory intermediate is 3.5–3.8× larger. Its main structural
+advantage is lower Babylon object overhead: botsinbox loads as 57 source meshes plus 16 real
+instances instead of thousands of glTF primitive meshes. The comparison demo reports actual
+browser conversion and Babylon loading time for both choices. The private sample files are
+not part of the repository.
 
 ### How the dependencies are wired
 
@@ -219,8 +229,10 @@ buffer upload costs. The sample USD files are intentionally not part of the repo
 |---|---|---|
 | **OpenUSD** | vcpkg overlay port ([`ports/usd`](ports/usd)) | vcpkg baseline in [`vcpkg.json`](vcpkg.json) (currently **26.05**) |
 | **oneTBB, zlib** | vcpkg | same baseline |
-| **Adobe USD-Fileformat-plugins** | git submodule | commit recorded in the superproject |
+| **Optimized USD-Fileformat-plugins fork** | git submodule | commit recorded in the superproject |
 | **tinygltf** | git submodule | **v2.8.21** — 2.9.x changed `WriteImageDataFunction` and fails to compile |
+| **meshoptimizer** | git submodule | **v0.22** |
+| **nlohmann-json** | vcpkg | same baseline; used by the export-only Babylon JSON plugin |
 
 **OpenUSD must be ≥ 26.05.** In 25.11 and earlier, `pxr/CMakeLists.txt` wraps
 `add_subdirectory(usd)` in `if (NOT EMSCRIPTEN)`, so an Emscripten build yields only
@@ -494,11 +506,11 @@ project as the reference for the material translation.
 ```
 CMakeLists.txt          the wasm build (find_package(pxr) from vcpkg + the submodules)
 CMakePresets.json       native, `wasm`, and `wasm-js` configure/build/workflow presets
-vcpkg.json              manifest: depends on usd; pins the vcpkg baseline
+vcpkg.json              manifest: depends on usd + nlohmann-json; pins the baseline
 ports/                  vcpkg overlay ports (static monolithic usd; single-threaded tbb)
 triplets/               vcpkg overlay triplet: wasm32-emscripten, release, no pthreads
 dependencies/           git submodules: USD-Fileformat-plugins, tinygltf, meshoptimizer
-src/                    C++ — native CLI, Emscripten bindings, stb image backend, WebResolver
+src/                    C++ — both CLIs/exporters, Emscripten bindings, stb images, resolver
 resources/              plugInfo.json manifests for the statically-linked plugins
 scripts/build.ps1       submodule init + Ninja shim + the `wasm` preset
 js/                     the npm package (TypeScript)
@@ -508,9 +520,9 @@ docs/                   built demo + wasm, committed and published by GitHub Pag
 test/                   node-based conversion and resolver tests
 ```
 
-`docs/` is committed on purpose: GitHub Pages serves it directly, so partners can try the
-converter from a URL without installing a toolchain. It is ~17 MB, dominated by the 12 MB
-`.wasm`.
+`docs/` is committed on purpose: GitHub Pages serves it directly, so partners can compare
+both converters without installing a toolchain. Use `?format=glb&sample=cube.usda` or
+`?format=babylon&sample=cube.usda` for deterministic comparison URLs.
 
 The folder is named `docs` rather than `dist` because GitHub Pages can only serve `/` or
 `/docs` when deploying from a branch. Publishing any other folder would require a Actions

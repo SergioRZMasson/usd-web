@@ -23,6 +23,7 @@ import type {
     ConvertOptions,
     ConvertResult,
     ConverterInfo,
+    ConverterBackend,
     CreateConverterOptions,
     LogLevel,
     LogMessage,
@@ -35,11 +36,10 @@ const SCRATCH_DIR = '/work';
 const LOG_LEVELS: readonly LogLevel[] = ['info', 'warning', 'error'];
 
 /**
- * Converts USD assets to glTF/GLB.
+ * Converts USD assets through an independently linked GLB or Babylon JSON exporter.
  *
- * The conversion runs inside OpenUSD itself: the module links Adobe's `usdGltf` file
- * format plugin statically, so `UsdStage::Export` dispatches to it exactly as it would in
- * a desktop USD installation. Nothing about the translation is reimplemented here.
+ * The conversion runs inside OpenUSD itself. The selected module statically links exactly
+ * one exporter plugin so download size and runtime cost can be compared independently.
  *
  * Instantiating the module is expensive (it loads a ~12 MB binary), so create one
  * converter and reuse it:
@@ -51,6 +51,7 @@ const LOG_LEVELS: readonly LogLevel[] = ['info', 'warning', 'error'];
  */
 export class UsdConverter {
     readonly #module: UsdGltfModule;
+    readonly #backend: ConverterBackend;
     readonly #onLog: ((message: LogMessage) => void) | undefined;
 
     /** Diagnostics collected for the conversion currently in flight. */
@@ -65,10 +66,12 @@ export class UsdConverter {
 
     private constructor(
         module: UsdGltfModule,
+        backend: ConverterBackend,
         abortState: { reason?: string },
         onLog?: (message: LogMessage) => void,
     ) {
         this.#module = module;
+        this.#backend = backend;
         this.#abortState = abortState;
         this.#onLog = onLog;
 
@@ -90,11 +93,11 @@ export class UsdConverter {
      * @throws {@link ModuleLoadError} if the binary cannot be fetched or instantiated.
      */
     static async create(options: CreateConverterOptions = {}): Promise<UsdConverter> {
-        const { wasmUrl, locateFile, wasmBinary, onLog } = options;
+        const { backend = 'gltf', wasmUrl, locateFile, wasmBinary, onLog } = options;
 
         let factory: UsdGltfModuleFactory;
         try {
-            factory = await loadModuleFactory();
+            factory = await loadModuleFactory(backend);
         } catch (cause) {
             throw new ModuleLoadError(
                 'the generated glue code could not be imported. Did you run the native build?',
@@ -125,7 +128,7 @@ export class UsdConverter {
             // a different path than the artifacts cannot find the schemas. Anchoring
             // both to the glue script's own directory makes the package work wherever it
             // is mounted. Under Node the default resolution is already correct.
-            const base = getGlueBaseUrl();
+            const base = getGlueBaseUrl(backend);
             const wasmOverride = wasmUrl ? String(wasmUrl) : undefined;
             if (base || wasmOverride) {
                 overrides.locateFile = (path: string, scriptDirectory: string) => {
@@ -144,23 +147,29 @@ export class UsdConverter {
             });
         }
 
-        if (!module.isGltfPluginAvailable()) {
+        const pluginAvailable =
+            backend === 'gltf'
+                ? module.isGltfPluginAvailable()
+                : module.isBabylonPluginAvailable();
+        if (!pluginAvailable) {
             throw new ModuleLoadError(
-                'the glTF file format plugin did not register. The build is missing its ' +
+                `the ${backend} file format plugin did not register. The build is missing its ` +
                     'plugInfo.json resources or was linked without --whole-archive.',
             );
         }
 
-        return new UsdConverter(module, abortState, onLog);
+        return new UsdConverter(module, backend, abortState, onLog);
     }
 
     /** Metadata describing the loaded native module. */
     get info(): ConverterInfo {
         this.#assertUsable();
         return {
+            backend: this.#backend,
             usdVersion: this.#module.getUsdVersion(),
             supportedOutputFormats: this.#module.getSupportedOutputFormats().split(','),
             gltfPluginAvailable: this.#module.isGltfPluginAvailable(),
+            babylonPluginAvailable: this.#module.isBabylonPluginAvailable(),
             resolver: this.#module.getResolverName(),
         };
     }
@@ -171,7 +180,7 @@ export class UsdConverter {
     }
 
     /**
-     * Converts a USD asset to glTF or GLB.
+     * Converts a USD asset using this converter's linked exporter backend.
      *
      * @throws {@link InvalidInputError} when the input or file name is unusable.
      * @throws {@link ConversionError} when OpenUSD fails to open or export the stage.
@@ -202,11 +211,20 @@ export class UsdConverter {
     ): Promise<ConvertResult> {
         const {
             additionalFiles,
-            format = 'glb',
+            embedTextures = true,
+            format = this.#backend === 'babylon' ? 'babylon' : 'glb',
             meshoptCompression = true,
             optimizeMeshes = true,
             resolveByFileName = true,
         } = options;
+        if (
+            (this.#backend === 'babylon' && format !== 'babylon') ||
+            (this.#backend === 'gltf' && format === 'babylon')
+        ) {
+            throw new InvalidInputError(
+                `The ${this.#backend} WebAssembly module cannot export ${format}.`,
+            );
+        }
 
         const module = this.#module;
         const written: string[] = [];
@@ -245,6 +263,7 @@ export class UsdConverter {
                 outputPath,
                 optimizeMeshes,
                 format === 'glb' && meshoptCompression,
+                format === 'babylon' && embedTextures,
             );
             // A fatal USD error terminates the runtime from inside the call above, so
             // this is checked before touching any of the returned values.

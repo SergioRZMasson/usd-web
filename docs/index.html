@@ -49,6 +49,10 @@
         background: var(--accent); color: #0b0b0f; font: inherit; font-weight: 600; cursor: pointer;
     }
     input[type=file]:disabled::file-selector-button { background: #444; cursor: not-allowed; }
+    select {
+        width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px;
+        background: #26262e; color: var(--text); font: inherit;
+    }
 
     .field { display: block; margin-bottom: 10px; }
     .field > span { display: block; margin-bottom: 4px; font-size: 12px; color: var(--muted); }
@@ -117,6 +121,13 @@
 
         <div class="section">
             <h2>Open</h2>
+            <label class="field">
+                <span>Intermediate format</span>
+                <select id="intermediate">
+                    <option value="glb">GLB · meshopt compressed</option>
+                    <option value="babylon">.babylon · native JSON</option>
+                </select>
+            </label>
             <label class="field">
                 <span>Single file or multi-select</span>
                 <input type="file" id="file" accept=".usd,.usda,.usdc,.usdz" multiple disabled />

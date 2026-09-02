@@ -1,0 +1,23 @@
+{
+    "Plugins": [
+        {
+            "Info": {
+                "Types": {
+                    "UsdBabylonFileFormat": {
+                        "bases": ["SdfFileFormat"],
+                        "displayName": "Babylon.js Scene",
+                        "extensions": ["babylon"],
+                        "formatId": "babylon",
+                        "primary": true,
+                        "target": "usd"
+                    }
+                }
+            },
+            "LibraryPath": "",
+            "Name": "usdBabylon_plugin",
+            "ResourcePath": "resources",
+            "Root": "..",
+            "Type": "library"
+        }
+    ]
+}

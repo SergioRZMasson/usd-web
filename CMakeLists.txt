@@ -4,8 +4,8 @@ cmake_minimum_required(VERSION 3.24)
 #
 # Compiles the performance-focused USD-Fileformat-plugins fork
 # (https://github.com/SergioRZMasson/USD-Fileformat-plugins)
-# as either a native command-line converter or a WebAssembly module that turns a USD asset
-# into a GLB buffer.
+# as a native Babylon JSON command-line converter and as separate GLB/Babylon WebAssembly
+# modules for isolated size and runtime comparisons.
 #
 # Dependencies are handled entirely by the build, so nothing has to be configured on the
 # machine beyond an Emscripten install and a vcpkg checkout (VCPKG_ROOT):
@@ -22,7 +22,8 @@ cmake_minimum_required(VERSION 3.24)
 #      `usdGltf` as SHARED, which Emscripten cannot link.
 #   2. A replacement for `utils/src/images.cpp` (see src/imagesWasm.cpp) that drops the
 #      OpenImageIO and pxr/imaging/hio dependencies in favour of stb.
-#   3. Native CLI and browser bindings around the same conversion path.
+#   3. An export-only Babylon JSON file format plugin.
+#   4. Native CLI and browser bindings around the two conversion paths.
 #
 # USD -> glTF translation changes live in the USD-Fileformat-plugins fork, while this
 # repository owns platform integration, CLI benchmarking, and browser bindings.
@@ -117,6 +118,7 @@ find_package(pxr CONFIG REQUIRED)
 # does not re-export zlib, so the final module must link it explicitly. (The previous
 # hand-rolled build pulled Emscripten's own `--use-port=zlib` instead; vcpkg builds it.)
 find_package(ZLIB REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 set(_pxr_targets
     arch tf gf pegtl js trace work plug vt ts ar kind sdf sdr pcp usd usdGeom usdVol
@@ -264,12 +266,42 @@ if(TARGET usd_m)
     target_link_libraries(usdGltf PUBLIC usd_m)
 endif()
 
-set(_plugin_resources "${CMAKE_CURRENT_SOURCE_DIR}/resources/usdGltf")
+# ---------------------------------------------------------------------------
+# usdBabylon — export-only Babylon.js JSON file format plugin
+# ---------------------------------------------------------------------------
+
+add_library(usdBabylon STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/babylon/fileFormat.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/babylon/babylonExport.cpp"
+)
+target_include_directories(usdBabylon
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/babylon"
+    PRIVATE
+        "${ADOBE_PLUGINS_DIR}/gltf/src"
+        "${CMAKE_CURRENT_BINARY_DIR}"
+)
+target_compile_definitions(usdBabylon PRIVATE USDBABYLON_EXPORTS)
+if(EMSCRIPTEN)
+    target_compile_options(usdBabylon PRIVATE -O3 -msimd128 -flto)
+endif()
+target_link_libraries(usdBabylon PUBLIC
+    fileformatUtils
+    nlohmann_json::nlohmann_json
+    usdGltf
+    usd usdGeom usdSkel usdShade
+)
+if(TARGET usd_m)
+    target_link_libraries(usdBabylon PUBLIC usd_m)
+endif()
+
+set(_gltf_plugin_resources "${CMAKE_CURRENT_SOURCE_DIR}/resources/usdGltf")
+set(_babylon_plugin_resources "${CMAKE_CURRENT_SOURCE_DIR}/resources/usdBabylon")
 set(_resolver_resources "${CMAKE_CURRENT_SOURCE_DIR}/resources/usdWebResolver")
 
 if(EMSCRIPTEN)
     # -----------------------------------------------------------------------
-    # WebAssembly module
+    # Separate WebAssembly modules for an isolated size/runtime comparison.
     # -----------------------------------------------------------------------
     add_executable(usd-web-gltf
         "${CMAKE_CURRENT_SOURCE_DIR}/src/bindings.cpp"
@@ -278,18 +310,16 @@ if(EMSCRIPTEN)
     target_include_directories(usd-web-gltf PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(usd-web-gltf PRIVATE usdGltf fileformatUtils)
     target_compile_options(usd-web-gltf PRIVATE -O3 -msimd128 -flto)
-
-    # Preserve static registration translation units from both plugin archives.
     target_link_options(usd-web-gltf PRIVATE
         "SHELL:-Wl,--whole-archive $<TARGET_FILE:usdGltf> -Wl,--no-whole-archive"
         "SHELL:-Wl,--whole-archive $<TARGET_FILE:usd_m> -Wl,--no-whole-archive"
     )
 
-    set(_resource_stage "${CMAKE_BINARY_DIR}/usd-resources")
-    file(REMOVE_RECURSE "${_resource_stage}")
-    file(COPY "${PXR_USD_PLUGIN_RESOURCES}/" DESTINATION "${_resource_stage}")
-    file(COPY "${_plugin_resources}" DESTINATION "${_resource_stage}")
-    file(COPY "${_resolver_resources}" DESTINATION "${_resource_stage}")
+    set(_gltf_resource_stage "${CMAKE_BINARY_DIR}/usd-resources-gltf")
+    file(REMOVE_RECURSE "${_gltf_resource_stage}")
+    file(COPY "${PXR_USD_PLUGIN_RESOURCES}/" DESTINATION "${_gltf_resource_stage}")
+    file(COPY "${_gltf_plugin_resources}" DESTINATION "${_gltf_resource_stage}")
+    file(COPY "${_resolver_resources}" DESTINATION "${_gltf_resource_stage}")
 
     target_link_options(usd-web-gltf PRIVATE
         --bind
@@ -307,17 +337,58 @@ if(EMSCRIPTEN)
         -msimd128
         -flto
         --strip-debug
-        "SHELL:--preload-file ${_resource_stage}@/usd"
+        "SHELL:--preload-file ${_gltf_resource_stage}@/usd"
     )
-
     set_target_properties(usd-web-gltf PROPERTIES
         OUTPUT_NAME "usd-web-gltf"
         SUFFIX ".js"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
+
+    add_executable(usd-web-babylon
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/bindings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/webResolver.cpp"
+    )
+    target_include_directories(usd-web-babylon PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(usd-web-babylon PRIVATE usdBabylon)
+    target_compile_options(usd-web-babylon PRIVATE -O3 -msimd128 -flto)
+    target_link_options(usd-web-babylon PRIVATE
+        "SHELL:-Wl,--whole-archive $<TARGET_FILE:usdBabylon> -Wl,--no-whole-archive"
+        "SHELL:-Wl,--whole-archive $<TARGET_FILE:usd_m> -Wl,--no-whole-archive"
+    )
+
+    set(_babylon_resource_stage "${CMAKE_BINARY_DIR}/usd-resources-babylon")
+    file(REMOVE_RECURSE "${_babylon_resource_stage}")
+    file(COPY "${PXR_USD_PLUGIN_RESOURCES}/" DESTINATION "${_babylon_resource_stage}")
+    file(COPY "${_babylon_plugin_resources}" DESTINATION "${_babylon_resource_stage}")
+    file(COPY "${_resolver_resources}" DESTINATION "${_babylon_resource_stage}")
+
+    target_link_options(usd-web-babylon PRIVATE
+        --bind
+        -sMODULARIZE=1
+        -sEXPORT_NAME=createUsdBabylonModule
+        -sENVIRONMENT=web,worker,node
+        -sALLOW_MEMORY_GROWTH=1
+        -sMEMORY_GROWTH_GEOMETRIC_STEP=0.5
+        -sMAXIMUM_MEMORY=2GB
+        -sFORCE_FILESYSTEM=1
+        -sEXPORTED_RUNTIME_METHODS=FS,HEAPU8
+        -sSTACK_SIZE=1MB
+        -sEXPORT_ES6=1
+        -sASSERTIONS=0
+        -msimd128
+        -flto
+        --strip-debug
+        "SHELL:--preload-file ${_babylon_resource_stage}@/usd"
+    )
+    set_target_properties(usd-web-babylon PROPERTIES
+        OUTPUT_NAME "usd-web-babylon"
+        SUFFIX ".js"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
 elseif(BUILD_NATIVE_CLI)
     # -----------------------------------------------------------------------
-    # Standard C++ command-line converter and private-input benchmark tests
+    # Standard C++ command-line converters and private-input benchmark tests
     # -----------------------------------------------------------------------
     add_executable(usd-web-gltf-cli
         "${CMAKE_CURRENT_SOURCE_DIR}/src/cli.cpp"
@@ -328,7 +399,7 @@ elseif(BUILD_NATIVE_CLI)
         "${TINYGLTF_DIR}"
     )
     target_compile_definitions(usd-web-gltf-cli PRIVATE
-        USD_WEB_GLTF_PLUGIN_RESOURCES="${_plugin_resources}/resources"
+        USD_WEB_GLTF_PLUGIN_RESOURCES="${_gltf_plugin_resources}/resources"
         USD_WEB_RESOLVER_PLUGIN_RESOURCES="${_resolver_resources}/resources"
         TINYGLTF_NO_STB_IMAGE
         TINYGLTF_NO_STB_IMAGE_WRITE
@@ -342,6 +413,24 @@ elseif(BUILD_NATIVE_CLI)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
 
+    add_executable(usd-web-babylon-cli
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/babylonCli.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/webResolver.cpp"
+    )
+    target_include_directories(usd-web-babylon-cli PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_compile_definitions(usd-web-babylon-cli PRIVATE
+        USD_WEB_BABYLON_PLUGIN_RESOURCES="${_babylon_plugin_resources}/resources"
+        USD_WEB_RESOLVER_PLUGIN_RESOURCES="${_resolver_resources}/resources"
+    )
+    target_link_libraries(usd-web-babylon-cli PRIVATE
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,usdBabylon>"
+    )
+    set_target_properties(usd-web-babylon-cli PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+
     include(CTest)
     if(BUILD_TESTING AND USD_WEB_BENCHMARK_INPUTS)
         set(_benchmark_index 0)
@@ -350,28 +439,27 @@ elseif(BUILD_NATIVE_CLI)
             get_filename_component(_benchmark_name "${_benchmark_input}" NAME_WE)
             string(MAKE_C_IDENTIFIER "${_benchmark_name}_${_benchmark_index}" _benchmark_id)
             add_test(
-                NAME "usd-web-baseline-${_benchmark_id}"
-                COMMAND usd-web-gltf-cli
-                    --json
-                    --iterations 1
-                    --no-mesh-optimization
-                    "${_benchmark_input}"
-                    "${CMAKE_BINARY_DIR}/benchmarks/baseline/${_benchmark_name}.glb"
-            )
-            set_tests_properties("usd-web-baseline-${_benchmark_id}" PROPERTIES
-                LABELS "benchmark;baseline;private-assets"
-            )
-            add_test(
-                NAME "usd-web-optimized-${_benchmark_id}"
+                NAME "usd-web-gltf-${_benchmark_id}"
                 COMMAND usd-web-gltf-cli
                     --json
                     --iterations 1
                     --meshopt-compression
                     "${_benchmark_input}"
-                    "${CMAKE_BINARY_DIR}/benchmarks/optimized/${_benchmark_name}.glb"
+                    "${CMAKE_BINARY_DIR}/benchmarks/gltf/${_benchmark_name}.glb"
             )
-            set_tests_properties("usd-web-optimized-${_benchmark_id}" PROPERTIES
-                LABELS "benchmark;private-assets"
+            set_tests_properties("usd-web-gltf-${_benchmark_id}" PROPERTIES
+                LABELS "benchmark;gltf;private-assets"
+            )
+            add_test(
+                NAME "usd-web-babylon-${_benchmark_id}"
+                COMMAND usd-web-babylon-cli
+                    --json
+                    --iterations 1
+                    "${_benchmark_input}"
+                    "${CMAKE_BINARY_DIR}/benchmarks/babylon/${_benchmark_name}.babylon"
+            )
+            set_tests_properties("usd-web-babylon-${_benchmark_id}" PROPERTIES
+                LABELS "benchmark;babylon;private-assets"
             )
         endforeach()
     endif()
@@ -423,7 +511,7 @@ if(BUILD_JS_LIBRARY)
         USES_TERMINAL
         VERBATIM
     )
-    add_dependencies(js-library usd-web-gltf)
+    add_dependencies(js-library usd-web-gltf usd-web-babylon)
 
     message(STATUS "BUILD_JS_LIBRARY=ON — the npm library will be built after the wasm module")
 endif()

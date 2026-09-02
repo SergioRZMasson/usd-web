@@ -38,6 +38,7 @@ export interface UsdGltfModule {
         outputPath: string,
         optimizeMeshes: boolean,
         meshoptCompression: boolean,
+        embedTextures: boolean,
     ): NativeConvertResult;
 
     /** Installs a callback invoked for every OpenUSD diagnostic. */
@@ -48,6 +49,9 @@ export interface UsdGltfModule {
 
     /** True when Adobe's glTF file format plugin resolved. */
     isGltfPluginAvailable(): boolean;
+
+    /** True when the export-only Babylon JSON plugin resolved. */
+    isBabylonPluginAvailable(): boolean;
 
     /** OpenUSD version, e.g. `"0.26.8"`. */
     getUsdVersion(): string;

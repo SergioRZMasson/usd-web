@@ -20,7 +20,7 @@
     {
       "name": "wasm",
       "displayName": "WebAssembly (Emscripten, Release)",
-      "description": "Static monolithic OpenUSD plus the optimized usdGltf fork, compiled with SIMD and LTO. Requires VCPKG_ROOT and Emscripten (emcc on PATH or EMSDK set).",
+      "description": "Separate GLB and Babylon JSON modules over static monolithic OpenUSD, compiled with SIMD and LTO. Requires VCPKG_ROOT and Emscripten.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/wasm",
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",

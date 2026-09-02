@@ -7,9 +7,13 @@
  */
 
 import type { UsdGltfModuleFactory } from './module.js';
+import type { ConverterBackend } from './types.js';
 
-/** Path of the glue module relative to the emitted bundle. */
-const GLUE_SPECIFIER = './wasm/usd-web-gltf.js';
+/** Paths of the independently linked glue modules relative to the emitted bundle. */
+const GLUE_SPECIFIERS: Record<ConverterBackend, string> = {
+    gltf: './wasm/usd-web-gltf.js',
+    babylon: './wasm/usd-web-babylon.js',
+};
 
 /**
  * Absolute URL of the directory holding the glue script, the `.wasm` binary and the
@@ -24,9 +28,10 @@ const GLUE_SPECIFIER = './wasm/usd-web-gltf.js';
  * path correctly, and handing it a `file://` URL would make it try to open that string
  * as a filesystem path.
  */
-export function getGlueBaseUrl(): string | undefined {
+export function getGlueBaseUrl(backend: ConverterBackend): string | undefined {
     try {
-        const url = new URL(GLUE_SPECIFIER, import.meta.url);
+        const specifier = GLUE_SPECIFIERS[backend];
+        const url = new URL(specifier, import.meta.url);
         if (url.protocol !== 'http:' && url.protocol !== 'https:') {
             return undefined;
         }
@@ -37,15 +42,17 @@ export function getGlueBaseUrl(): string | undefined {
 }
 
 /** Dynamically imports the Emscripten factory. */
-export async function loadModuleFactory(): Promise<UsdGltfModuleFactory> {
-    const specifier: string = GLUE_SPECIFIER;
+export async function loadModuleFactory(
+    backend: ConverterBackend,
+): Promise<UsdGltfModuleFactory> {
+    const specifier = GLUE_SPECIFIERS[backend];
     const glue = (await import(/* @vite-ignore */ /* webpackIgnore: true */ specifier)) as {
         default: UsdGltfModuleFactory;
     };
 
     if (typeof glue.default !== 'function') {
         throw new TypeError(
-            `${GLUE_SPECIFIER} did not export an Emscripten module factory as its default export.`,
+            `${specifier} did not export an Emscripten module factory as its default export.`,
         );
     }
 

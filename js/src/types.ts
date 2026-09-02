@@ -17,14 +17,19 @@ export interface LogMessage {
     message: string;
 }
 
-/** Output container format. */
-export type OutputFormat = 'glb' | 'gltf';
+/** Intermediate format produced before Babylon.js loads the scene. */
+export type OutputFormat = 'glb' | 'gltf' | 'babylon';
+/** Independently linked WebAssembly exporter module. */
+export type ConverterBackend = 'gltf' | 'babylon';
 
 /** Options for instantiating the WebAssembly module. */
 export interface CreateConverterOptions {
+    /** Exporter module to instantiate. Defaults to `"gltf"`. */
+    backend?: ConverterBackend;
+
     /**
-     * Explicit URL of `usd-web-gltf.wasm`. When omitted the file is resolved relative to
-     * the glue script, which is correct for most bundler setups.
+     * Explicit URL of the selected backend's `.wasm`. When omitted the file is resolved
+     * relative to its generated glue script.
      */
     wasmUrl?: string | URL;
 
@@ -70,7 +75,7 @@ export interface ConvertOptions {
      */
     resolveByFileName?: boolean;
 
-    /** Output container. Defaults to `"glb"`. */
+    /** Output container. Defaults to `"glb"` for the glTF backend and `"babylon"` otherwise. */
     format?: OutputFormat;
 
     /**
@@ -86,13 +91,19 @@ export interface ConvertOptions {
      */
     meshoptCompression?: boolean;
 
+    /**
+     * Embed texture payloads as data URLs in `.babylon` output. Defaults to `true` and is
+     * ignored for glTF/GLB output.
+     */
+    embedTextures?: boolean;
+
     /** Diagnostics for this conversion only. */
     onLog?: (message: LogMessage) => void;
 }
 
 /** Result of a successful conversion. */
 export interface ConvertResult {
-    /** The encoded glTF/GLB payload. */
+    /** The encoded GLB, glTF JSON, or Babylon JSON payload. */
     data: Uint8Array;
 
     /** Suggested output file name, derived from the input name. */
@@ -115,12 +126,16 @@ export interface ConvertResult {
 
 /** Details about the loaded native module. */
 export interface ConverterInfo {
+    /** Independently linked exporter module backing this converter. */
+    backend: ConverterBackend;
     /** OpenUSD version the module was built from, e.g. `"0.26.8"`. */
     usdVersion: string;
     /** Extensions USD can write, as registered by the linked file format plugins. */
     supportedOutputFormats: readonly string[];
     /** Whether Adobe's glTF file format plugin registered successfully. */
     gltfPluginAvailable: boolean;
+    /** Whether the export-only Babylon JSON file format plugin registered successfully. */
+    babylonPluginAvailable: boolean;
     /** Asset resolver in use — `"WebResolver"` when name-fallback is available. */
     resolver: string;
 }

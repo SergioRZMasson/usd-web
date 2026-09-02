@@ -1,8 +1,7 @@
 /**
  * usd-web demo — convert USD in the browser, render it with Babylon.js.
  *
- * Flow: USD bytes -> (wasm: OpenUSD + Adobe usdGltf plugin) -> GLB bytes -> Babylon.
- * The GLB is handed to Babylon as an ArrayBufferView, so no blob URL is involved.
+ * Flow: USD bytes -> independently-linked GLB or .babylon wasm exporter -> Babylon.js.
  */
 
 import { UsdConverter } from 'usd-web-gltf';
@@ -19,16 +18,23 @@ import { CubeTexture } from '@babylonjs/core/Materials/Textures/cubeTexture.js';
 import { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial.js';
 import { VertexBuffer } from '@babylonjs/core/Buffers/buffer.js';
 import { LoadAssetContainerAsync } from '@babylonjs/core/Loading/sceneLoader.js';
+import { SceneLoaderFlags } from '@babylonjs/core/Loading/sceneLoaderFlags.js';
+import { LoadAssetContainerFromSerializedScene } from '@babylonjs/core/Loading/Plugins/babylonFileLoader.js';
 
-// Side-effect imports: the scene helpers back createDefaultSkybox, and the glTF registration
-// is what lets AppendSceneAsync recognise the '.glb' the converter produces.
+// Side-effect imports required by the two intermediate-format loaders.
 import '@babylonjs/core/Helpers/sceneHelpers.js';
 import '@babylonjs/core/Loading/loadingScreen.js';
+import '@babylonjs/core/Meshes/transformNode.js';
+import '@babylonjs/core/Meshes/instancedMesh.js';
+import '@babylonjs/core/Materials/PBR/pbrMetallicRoughnessMaterial.js';
 import '@babylonjs/loaders/glTF/index.js';
+
+SceneLoaderFlags.loggingLevel = 0;
 
 const els = {
     file: document.getElementById('file'),
     folder: document.getElementById('folder'),
+    intermediate: document.getElementById('intermediate'),
     samples: document.getElementById('samples'),
     status: document.getElementById('status'),
     log: document.getElementById('log'),
@@ -36,6 +42,10 @@ const els = {
     canvas: document.getElementById('canvas'),
     drop: document.getElementById('drop'),
 };
+const requestedFormat = new URLSearchParams(location.search).get('format');
+if (requestedFormat === 'glb' || requestedFormat === 'babylon') {
+    els.intermediate.value = requestedFormat;
+}
 
 // --- logging ---------------------------------------------------------------
 
@@ -190,13 +200,36 @@ function frameScene(meshes) {
 
 // --- converter -------------------------------------------------------------
 
-setStatus('Loading OpenUSD (WebAssembly)…', true);
+const initialBackend = els.intermediate.value === 'babylon' ? 'babylon' : 'gltf';
+setStatus(`Loading ${initialBackend === 'gltf' ? 'GLB' : '.babylon'} exporter (WebAssembly)…`, true);
 
-let converter;
-try {
-    converter = await UsdConverter.create({
+const converters = new Map();
+
+async function getConverter(backend) {
+    if (converters.has(backend)) return converters.get(backend);
+
+    const pending = UsdConverter.create({
+        backend,
         onLog: (m) => m.level !== 'info' && log(m.message, m.level),
     });
+    converters.set(backend, pending);
+    try {
+        const converter = await pending;
+        converters.set(backend, converter);
+        const label = backend === 'gltf' ? 'GLB' : '.babylon';
+        log(
+            `${label} module: OpenUSD ${converter.info.usdVersion}; ` +
+                `formats ${converter.info.supportedOutputFormats.join(', ')}`,
+        );
+        return converter;
+    } catch (error) {
+        converters.delete(backend);
+        throw error;
+    }
+}
+
+try {
+    await getConverter(initialBackend);
 } catch (error) {
     setStatus('Failed to load the WebAssembly module.');
     log(String(error), 'error');
@@ -210,10 +243,8 @@ try {
     throw error;
 }
 
-const info = converter.info;
+const info = (await getConverter(initialBackend)).info;
 setStatus(`Ready — OpenUSD ${info.usdVersion}`);
-log(`OpenUSD ${info.usdVersion} loaded. Writable formats: ${info.supportedOutputFormats.join(', ')}`);
-log(`Adobe usdGltf plugin: ${info.gltfPluginAvailable ? 'registered' : 'MISSING'}`);
 log(`Asset resolver: ${info.resolver}`);
 setBusy(false);
 
@@ -225,14 +256,17 @@ setBusy(false);
 // statistics. Large assets take seconds to convert, so that window is easy to hit.
 let loadGeneration = 0;
 let pendingLoad = Promise.resolve();
+let lastLoad = null;
 
 function setBusy(busy) {
     els.file.disabled = busy;
     els.folder.disabled = busy;
+    els.intermediate.disabled = busy;
     for (const button of els.samples.querySelectorAll('button')) button.disabled = busy;
 }
 
 async function loadUsd(bytes, fileName, additionalFiles = undefined) {
+    lastLoad = { bytes, fileName, additionalFiles };
     const generation = ++loadGeneration;
 
     // Chain onto whatever is in flight so two loads never overlap, and keep the chain alive
@@ -255,17 +289,26 @@ async function runLoad(generation, bytes, fileName, additionalFiles) {
     setStatus(`Converting ${fileName}…`, true);
     setBusy(true);
 
+    const intermediate = els.intermediate.value;
+    const backend = intermediate === 'babylon' ? 'babylon' : 'gltf';
+    let converter;
     try {
+        converter = await getConverter(backend);
         const started = performance.now();
         const { data, durationMs, missingAssets } = await converter.convert(bytes, {
             fileName,
             additionalFiles,
+            format: intermediate,
         });
         const convertMs = performance.now() - started;
 
         if (generation !== loadGeneration) return;
 
-        log(`Converted to GLB: ${formatBytes(data.byteLength)} in ${durationMs.toFixed(0)} ms`);
+        const intermediateLabel = intermediate === 'babylon' ? '.babylon' : 'GLB';
+        log(
+            `Converted to ${intermediateLabel}: ${formatBytes(data.byteLength)} in ` +
+                `${durationMs.toFixed(0)} ms`,
+        );
 
         if (missingAssets.length > 0) {
             log(
@@ -276,11 +319,14 @@ async function runLoad(generation, bytes, fileName, additionalFiles) {
         }
 
         const loadStarted = performance.now();
-        // Load into a container rather than straight into the scene: the container is the
-        // record of what this asset added, which is what makes unloading it exact. Babylon
-        // accepts an ArrayBufferView directly; pluginExtension tells it which loader to use,
-        // since there is no filename to infer from.
-        const container = await LoadAssetContainerAsync(data, scene, { pluginExtension: '.glb' });
+        const container =
+            intermediate === 'babylon'
+                ? LoadAssetContainerFromSerializedScene(
+                      scene,
+                      new TextDecoder().decode(data),
+                      '',
+                  )
+                : await LoadAssetContainerAsync(data, scene, { pluginExtension: '.glb' });
 
         // Only release the old asset once the new one has loaded, so a failure part-way
         // through leaves the previous scene on screen rather than an empty one.
@@ -303,8 +349,8 @@ async function runLoad(generation, bytes, fileName, additionalFiles) {
 
         renderStats([
             ['Source', `${fileName} · ${formatBytes(bytes.byteLength)}`],
-            ['GLB', formatBytes(data.byteLength)],
-            ['USD → GLB', `${durationMs.toFixed(0)} ms`],
+            [intermediateLabel, formatBytes(data.byteLength)],
+            [`USD → ${intermediateLabel}`, `${durationMs.toFixed(0)} ms`],
             ['Babylon load', `${loadMs.toFixed(0)} ms`],
             ['Total', `${(convertMs + loadMs).toFixed(0)} ms`],
             ['Meshes', String(meshes.length)],
@@ -327,14 +373,13 @@ async function runLoad(generation, bytes, fileName, additionalFiles) {
 
         // OpenUSD treats some malformed input as fatal, which terminates the wasm
         // runtime. The instance is unusable afterwards, so a fresh one is created.
-        if (converter.aborted) {
+        if (converter?.aborted) {
             log('The WebAssembly runtime aborted. Reloading the module…', 'warning');
             setStatus('Reloading module…', true);
             try {
-                converter = await UsdConverter.create({
-                    onLog: (m) => m.level !== 'info' && log(m.message, m.level),
-                });
-                setStatus(`Ready — OpenUSD ${converter.info.usdVersion}`);
+                converters.delete(backend);
+                const replacement = await getConverter(backend);
+                setStatus(`Ready — OpenUSD ${replacement.info.usdVersion}`);
             } catch (reloadError) {
                 setStatus('The WebAssembly module could not be reloaded. Refresh the page.');
                 log(String(reloadError?.message ?? reloadError), 'error');
@@ -358,6 +403,22 @@ function renderStats(rows) {
         }),
     );
 }
+
+els.intermediate.addEventListener('change', async () => {
+    if (lastLoad) {
+        await loadUsd(lastLoad.bytes, lastLoad.fileName, lastLoad.additionalFiles);
+    } else {
+        const backend = els.intermediate.value === 'babylon' ? 'babylon' : 'gltf';
+        setStatus(`Loading ${backend === 'gltf' ? 'GLB' : '.babylon'} exporter…`, true);
+        try {
+            const converter = await getConverter(backend);
+            setStatus(`Ready — OpenUSD ${converter.info.usdVersion}`);
+        } catch (error) {
+            setStatus('Failed to load the selected exporter.');
+            log(String(error?.message ?? error), 'error');
+        }
+    }
+});
 
 // --- input -----------------------------------------------------------------
 
@@ -501,9 +562,7 @@ document.addEventListener('drop', async (event) => {
     }
 });
 
-els.samples.addEventListener('click', async (event) => {
-    const name = event.target?.dataset?.sample;
-    if (!name) return;
+async function loadSample(name) {
     setStatus(`Fetching ${name}…`, true);
     try {
         const response = await fetch(`./assets/${name}`);
@@ -517,4 +576,16 @@ els.samples.addEventListener('click', async (event) => {
         log(String(error?.message ?? error), 'error');
         setBusy(false);
     }
+}
+
+els.samples.addEventListener('click', async (event) => {
+    const name = event.target?.dataset?.sample;
+    if (name) {
+        await loadSample(name);
+    }
 });
+
+const requestedSample = new URLSearchParams(location.search).get('sample');
+if (requestedSample && [...els.samples.querySelectorAll('button')].some((button) => button.dataset.sample === requestedSample)) {
+    await loadSample(requestedSample);
+}

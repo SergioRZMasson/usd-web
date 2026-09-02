@@ -37,6 +37,7 @@ export type {
     BinaryInput,
     ConvertOptions,
     ConvertResult,
+    ConverterBackend,
     ConverterInfo,
     CreateConverterOptions,
     LogLevel,
@@ -46,10 +47,15 @@ export type {
 } from './types.js';
 
 import { UsdConverter } from './converter.js';
-import type { BinaryInput, ConvertOptions, CreateConverterOptions } from './types.js';
+import type {
+    BinaryInput,
+    ConvertOptions,
+    ConverterBackend,
+    CreateConverterOptions,
+} from './types.js';
 
-/** Lazily-created converter backing the {@link usdToGlb} helper. */
-let sharedConverter: Promise<UsdConverter> | undefined;
+/** Lazily-created converters, kept separate so wasm size/runtime comparisons stay isolated. */
+const sharedConverters: Partial<Record<ConverterBackend, Promise<UsdConverter>>> = {};
 
 /**
  * Returns a process-wide shared {@link UsdConverter}, instantiating the WebAssembly
@@ -60,22 +66,25 @@ let sharedConverter: Promise<UsdConverter> | undefined;
  * transparently.
  */
 export function getSharedConverter(options?: CreateConverterOptions): Promise<UsdConverter> {
-    sharedConverter = (sharedConverter ?? create(options)).then((converter) => {
+    const backend = options?.backend ?? 'gltf';
+    sharedConverters[backend] = (
+        sharedConverters[backend] ?? create({ ...options, backend })
+    ).then((converter) => {
         // A fatal USD error terminates the runtime; the instance cannot be reused.
         if (converter.aborted) {
-            sharedConverter = create(options);
-            return sharedConverter;
+            sharedConverters[backend] = create({ ...options, backend });
+            return sharedConverters[backend];
         }
         return converter;
     });
-    return sharedConverter;
+    return sharedConverters[backend];
 }
 
 function create(options?: CreateConverterOptions): Promise<UsdConverter> {
     return UsdConverter.create(options).catch((error: unknown) => {
         // Don't cache a failed instantiation; a later call may succeed once the caller
         // corrects the wasm URL.
-        sharedConverter = undefined;
+        sharedConverters[options?.backend ?? 'gltf'] = undefined;
         throw error;
     });
 }
@@ -91,8 +100,20 @@ export async function usdToGlb(
     input: BinaryInput,
     options?: ConvertOptions,
 ): Promise<Uint8Array> {
-    const converter = await getSharedConverter();
+    const converter = await getSharedConverter({ backend: 'gltf' });
     const result = await converter.convert(input, { ...options, format: 'glb' });
+    return result.data;
+}
+
+/**
+ * Converts a USD asset to Babylon.js' native JSON scene format.
+ */
+export async function usdToBabylon(
+    input: BinaryInput,
+    options?: ConvertOptions,
+): Promise<Uint8Array> {
+    const converter = await getSharedConverter({ backend: 'babylon' });
+    const result = await converter.convert(input, { ...options, format: 'babylon' });
     return result.data;
 }
 
