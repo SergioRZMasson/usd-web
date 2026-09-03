@@ -32,6 +32,11 @@ export const enum MaterialFlags {
     AlphaBlend = 1 << 2,
 }
 
+export const enum MeshFlags {
+    DoubleSided = 1 << 0,
+    LeftHanded = 1 << 1,
+}
+
 export const enum GeometryFlags {
     Normals = 1 << 0,
     Tangents = 1 << 1,

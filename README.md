@@ -244,6 +244,12 @@ deduplication, primvar interpolation, triangulation, material binding, `UsdPrevi
 `UsdSkel`, vertex welding, and command packing in new OpenUSD-based code. It does not call
 Adobe `readStage`, construct Adobe `UsdData`, or link `fileformatUtils`/`usdGltf`.
 
+It also does **not** call `UsdStage::Flatten`. `UsdStage::Open` performs composition and the
+extractor reads the resulting composed prims directly, including references, payloads,
+variants, and instance proxies. Flattening was needed only to pass a temporary `SdfLayer`
+through the file-format-plugin exporters; omitting it avoids the 17-34% flatten phase
+measured in the GLB and Babylon JSON paths.
+
 Warm browser conversions below are averages of three conversions in persistent Wasm
 instances. Both direct implementations used the same stage, worker, protocol consumer, and
 meshoptimizer settings:
@@ -251,12 +257,12 @@ meshoptimizer settings:
 |Input|Direct implementation|Stage open|Stage read|Mesh preparation|Command packing|Native total|Intermediate|
 |---|---|---:|---:|---:|---:|---:|---:|
 |botsinbox|Adobe `UsdData` baseline|541 ms|31 ms|111 ms|39 ms|723 ms|22.61 MB|
-|botsinbox|OpenUSD-only|538 ms|34 ms|89 ms|3 ms|**666 ms**|22.57 MB|
+|botsinbox|OpenUSD-only|535 ms|43 ms|88 ms|2 ms|**669 ms**|22.57 MB|
 |botsinbox 2|Adobe `UsdData` baseline|450 ms|18 ms|82 ms|26 ms|577 ms|15.06 MB|
-|botsinbox 2|OpenUSD-only|451 ms|23 ms|65 ms|1 ms|**541 ms**|15.03 MB|
+|botsinbox 2|OpenUSD-only|450 ms|29 ms|65 ms|1 ms|**545 ms**|15.03 MB|
 
-The OpenUSD-only implementation is **7.9% faster on botsinbox and 6.2% faster on botsinbox
-2**. Stage traversal itself is similar or slightly slower; the gain comes from preparing
+The OpenUSD-only implementation is **7.4% faster on botsinbox and 5.5% faster on botsinbox
+2** after winding validation. Stage traversal itself is similar or slightly slower; the gain comes from preparing
 the final vertex streams directly and reducing command packing by 93-96%. Both paths emit
 57 source meshes plus 16 instances and 554,439 unique vertices for botsinbox, and 27 meshes
 with 387,289 vertices for botsinbox 2.
@@ -266,6 +272,15 @@ The baseline supports composed transform hierarchies, instance proxies, material
 and skeletal animation. Unsupported shader models, incompatible metallic/roughness texture
 layouts, conflicting UV sets, blend shapes, cameras, and lights are reported or omitted
 rather than silently approximated.
+
+USD geometry is right-handed by default, while Babylon scenes are commonly left-handed.
+The materializer now follows Babylon's glTF-loader convention: it sets source-mesh side
+orientation explicitly and lets Babylon account for the correction root's determinant.
+Authored `leftHanded` gprims and mirrored skin bind transforms are handled separately. When
+authored normals strongly disagree with a mesh's declared winding, the visualization path
+uses the authored exterior direction and reports the inconsistent USD geometry rather than
+globally disabling back-face culling. The bounded validation added less than 1% to the two
+large-scene direct conversion benchmarks.
 
 ### OpenUSD and exporter phase timing
 

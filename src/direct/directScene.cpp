@@ -233,6 +233,7 @@ struct MeshData
 {
     std::string name;
     bool doubleSided = false;
+    bool leftHanded = false;
     uint32_t skeletonId = kMissingOffset;
     uint32_t influenceCount = 0;
     std::vector<GfVec3f> positions;
@@ -279,6 +280,7 @@ struct SceneData
     std::unordered_map<std::string, uint32_t> nodeIds;
     std::vector<MeshData> meshes;
     std::unordered_map<std::string, size_t> meshIds;
+    std::unordered_map<std::string, bool> meshWinding;
     std::vector<SkeletonData> skeletons;
     std::unordered_map<std::string, uint32_t> skeletonIds;
     std::unordered_map<std::string, SkinBinding> skinBindings;
@@ -737,7 +739,8 @@ materialUvName(const SceneData& scene,
 std::vector<GfVec3f>
 computeSmoothNormals(const VtVec3fArray& points,
                      const VtIntArray& faceCounts,
-                     const VtIntArray& faceIndices)
+                     const VtIntArray& faceIndices,
+                     bool leftHanded)
 {
     std::vector<GfVec3f> normals(points.size(), GfVec3f(0.0f));
     size_t cornerOffset = 0;
@@ -756,8 +759,11 @@ computeSmoothNormals(const VtVec3fArray& points,
                 static_cast<size_t>(third) >= points.size()) {
                 continue;
             }
-            const GfVec3f faceNormal =
+            GfVec3f faceNormal =
               GfCross(points[second] - points[first], points[third] - points[first]);
+            if (leftHanded) {
+                faceNormal = -faceNormal;
+            }
             normals[first] += faceNormal;
             normals[second] += faceNormal;
             normals[third] += faceNormal;
@@ -770,6 +776,75 @@ computeSmoothNormals(const VtVec3fArray& points,
         }
     }
     return normals;
+}
+
+std::optional<bool>
+inferLeftHandedWinding(const VtVec3fArray& points,
+                       const VtIntArray& faceCounts,
+                       const VtIntArray& faceIndices,
+                       const PrimvarData<GfVec3f>& normals)
+{
+    if (!normals) {
+        return std::nullopt;
+    }
+    constexpr size_t maxSamples = 4096;
+    size_t positive = 0;
+    size_t negative = 0;
+    size_t cornerOffset = 0;
+    for (size_t face = 0; face < faceCounts.size() &&
+                          positive + negative < maxSamples;
+         ++face) {
+        const int count = faceCounts[face];
+        for (int triangle = 0;
+             triangle < count - 2 && positive + negative < maxSamples;
+             ++triangle) {
+            const std::array<size_t, 3> corners = {
+                cornerOffset,
+                cornerOffset + static_cast<size_t>(triangle + 1),
+                cornerOffset + static_cast<size_t>(triangle + 2),
+            };
+            std::array<size_t, 3> pointIndices;
+            bool valid = true;
+            GfVec3f authoredNormal(0.0f);
+            for (size_t vertex = 0; vertex < corners.size(); ++vertex) {
+                const int pointIndex = faceIndices[corners[vertex]];
+                if (pointIndex < 0 || static_cast<size_t>(pointIndex) >= points.size()) {
+                    valid = false;
+                    break;
+                }
+                pointIndices[vertex] = static_cast<size_t>(pointIndex);
+                const GfVec3f* normal =
+                  normals.value(face, corners[vertex], pointIndices[vertex]);
+                if (!normal) {
+                    valid = false;
+                    break;
+                }
+                authoredNormal += *normal;
+            }
+            if (!valid || authoredNormal.Normalize() <=
+                            std::numeric_limits<float>::epsilon()) {
+                continue;
+            }
+            GfVec3f geometricNormal =
+              GfCross(points[pointIndices[1]] - points[pointIndices[0]],
+                      points[pointIndices[2]] - points[pointIndices[0]]);
+            if (geometricNormal.Normalize() <= std::numeric_limits<float>::epsilon()) {
+                continue;
+            }
+            const float agreement = GfDot(geometricNormal, authoredNormal);
+            if (agreement > 0.1f) {
+                ++positive;
+            } else if (agreement < -0.1f) {
+                ++negative;
+            }
+        }
+        cornerOffset += static_cast<size_t>(count);
+    }
+    const size_t considered = positive + negative;
+    if (considered == 0 || std::max(positive, negative) * 4 < considered * 3) {
+        return std::nullopt;
+    }
+    return negative > positive;
 }
 
 template<typename T>
@@ -1117,12 +1192,14 @@ std::string
 meshCacheKey(const UsdPrim& prim,
              const std::vector<uint32_t>& faceMaterials,
              uint32_t skeletonId,
-             bool doubleSided)
+             bool doubleSided,
+             bool leftHanded)
 {
     const UsdPrim source = prim.IsInstanceProxy() ? prim.GetPrimInPrototype() : prim;
     std::string key = source ? source.GetPath().GetString() : prim.GetPath().GetString();
     key += "|s" + std::to_string(skeletonId);
     key += doubleSided ? "|d1" : "|d0";
+    key += leftHanded ? "|l1" : "|l0";
     uint64_t materialHash = 1469598103934665603ull;
     for (const uint32_t material : faceMaterials) {
         materialHash ^= material;
@@ -1180,9 +1257,65 @@ extractMesh(const UsdGeomMesh& usdMesh,
 
     bool doubleSided = false;
     usdMesh.GetDoubleSidedAttr().Get(&doubleSided, UsdTimeCode::Default());
-    const uint32_t skeletonId = skin ? skin->skeletonId : kMissingOffset;
-    const std::string key =
-      meshCacheKey(usdMesh.GetPrim(), faceMaterials, skeletonId, doubleSided);
+    TfToken orientation = UsdGeomTokens->rightHanded;
+    UsdGeomGprim(usdMesh.GetPrim())
+      .GetOrientationAttr()
+      .Get(&orientation, UsdTimeCode::Default());
+    const bool declaredLeftHanded = orientation == UsdGeomTokens->leftHanded;
+    const UsdPrim sourcePrim =
+      usdMesh.GetPrim().IsInstanceProxy() ? usdMesh.GetPrim().GetPrimInPrototype()
+                                          : usdMesh.GetPrim();
+    const std::string windingKey =
+      (sourcePrim ? sourcePrim.GetPath() : usdMesh.GetPath()).GetString() +
+      (declaredLeftHanded ? "|left" : "|right");
+    PrimvarData<GfVec3f> normalData;
+    bool normalsRead = false;
+    bool sourceLeftHanded = declaredLeftHanded;
+    const auto cachedWinding = scene.meshWinding.find(windingKey);
+    if (cachedWinding != scene.meshWinding.end()) {
+        sourceLeftHanded = cachedWinding->second;
+    } else {
+        normalData = readNormals(usdMesh);
+        normalsRead = true;
+        if (const std::optional<bool> inferred =
+              inferLeftHandedWinding(points, faceCounts, faceIndices, normalData)) {
+            sourceLeftHanded = *inferred;
+            if (sourceLeftHanded != declaredLeftHanded) {
+                TF_WARN("Mesh <%s> has authored normals opposite its declared '%s' winding; "
+                        "using the authored exterior direction for Babylon culling.",
+                        usdMesh.GetPath().GetText(),
+                        orientation.GetText());
+            }
+        }
+        scene.meshWinding.emplace(windingKey, sourceLeftHanded);
+    }
+    GfMatrix4d geomBind(1.0);
+    uint32_t influenceCount = 0;
+    std::vector<JointSet> pointJoints;
+    std::vector<WeightSet> pointWeights;
+    bool skinningValid = false;
+    if (skin) {
+        skinningValid = readSkinning(
+          skin, points.size(), geomBind, influenceCount, pointJoints, pointWeights);
+        if (!skinningValid) {
+            TF_WARN(
+              "Could not read skinning influences for mesh <%s>; emitting it as a static mesh.",
+              usdMesh.GetPath().GetText());
+            geomBind.SetIdentity();
+            influenceCount = 0;
+            pointJoints.clear();
+            pointWeights.clear();
+        }
+    }
+    const bool bakedReflection = geomBind.GetDeterminant() < 0.0;
+    const bool outputLeftHanded = sourceLeftHanded != bakedReflection;
+    const uint32_t skeletonId =
+      skinningValid ? skin->skeletonId : kMissingOffset;
+    const std::string key = meshCacheKey(usdMesh.GetPrim(),
+                                         faceMaterials,
+                                         skeletonId,
+                                         doubleSided,
+                                         outputLeftHanded);
     const auto cached = scene.meshIds.find(key);
     if (cached != scene.meshIds.end()) {
         scene.meshes[cached->second].nodeIds.push_back(nodeId);
@@ -1192,12 +1325,17 @@ extractMesh(const UsdGeomMesh& usdMesh,
     MeshData mesh;
     mesh.name = displayName(usdMesh.GetPrim(), "Mesh");
     mesh.doubleSided = doubleSided;
+    mesh.leftHanded = outputLeftHanded;
     mesh.skeletonId = skeletonId;
+    mesh.influenceCount = influenceCount;
 
-    PrimvarData<GfVec3f> normalData = readNormals(usdMesh);
+    if (!normalsRead) {
+        normalData = readNormals(usdMesh);
+    }
     std::vector<GfVec3f> generatedNormals;
     if (!normalData) {
-        generatedNormals = computeSmoothNormals(points, faceCounts, faceIndices);
+        generatedNormals =
+          computeSmoothNormals(points, faceCounts, faceIndices, sourceLeftHanded);
         normalData.values.assign(generatedNormals.begin(), generatedNormals.end());
         normalData.interpolation = UsdGeomTokens->vertex;
     }
@@ -1212,17 +1350,6 @@ extractMesh(const UsdGeomMesh& usdMesh,
     const PrimvarData<float> opacityData =
       readAuthoredPrimvar<float>(gprim.GetDisplayOpacityPrimvar());
 
-    GfMatrix4d geomBind(1.0);
-    std::vector<JointSet> pointJoints;
-    std::vector<WeightSet> pointWeights;
-    if (skin &&
-        !readSkinning(
-          skin, points.size(), geomBind, mesh.influenceCount, pointJoints, pointWeights)) {
-        TF_WARN("Could not read skinning influences for mesh <%s>; emitting it as a static mesh.",
-                usdMesh.GetPath().GetText());
-        mesh.skeletonId = kMissingOffset;
-        mesh.influenceCount = 0;
-    }
     const GfMatrix4d normalTransform = geomBind.GetInverse().GetTranspose();
 
     std::map<uint32_t, std::vector<uint32_t>> materialIndices;
@@ -1752,7 +1879,9 @@ packScene(const SceneData& scene, SceneBuffers& result)
                               : kMissingOffset);
         commands.buffer.u32(nameOffset);
         commands.buffer.u32(nameLength);
-        commands.buffer.u32(mesh.doubleSided ? 1 : 0);
+        uint32_t meshFlags = mesh.doubleSided ? MeshDoubleSided : 0;
+        meshFlags |= mesh.leftHanded ? MeshLeftHanded : 0;
+        commands.buffer.u32(meshFlags);
         commands.buffer.u32(mesh.skeletonId);
         commands.buffer.u32(submeshesOffset);
         commands.buffer.u32(static_cast<uint32_t>(mesh.submeshes.size()));

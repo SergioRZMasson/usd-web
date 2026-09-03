@@ -6,6 +6,7 @@ import { Skeleton } from "@babylonjs/core/Bones/skeleton.js";
 import { ShaderStore } from "@babylonjs/core/Engines/shaderStore.js";
 import { Color3 } from "@babylonjs/core/Maths/math.color.js";
 import { Matrix, Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector.js";
+import { Material } from "@babylonjs/core/Materials/material.js";
 import { MultiMaterial } from "@babylonjs/core/Materials/multiMaterial.js";
 import { PBRMaterial } from "@babylonjs/core/Materials/PBR/pbrMaterial.js";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture.js";
@@ -23,6 +24,7 @@ import {
     Command,
     GeometryFlags,
     MaterialFlags,
+    MeshFlags,
     MISSING_OFFSET,
     PayloadReader,
     readCommands,
@@ -181,9 +183,11 @@ export async function materializeCommandBuffers(
                     ? Quaternion.FromArray([-0.7071068, 0, 0, 0.7071068])
                     : Quaternion.Identity();
                 root.scaling.copyFrom(
-                    zUp
-                        ? new Vector3(metersPerUnit, -metersPerUnit, metersPerUnit)
-                        : new Vector3(metersPerUnit, metersPerUnit, -metersPerUnit),
+                    scene.useRightHandedSystem
+                        ? new Vector3(metersPerUnit, metersPerUnit, metersPerUnit)
+                        : zUp
+                          ? new Vector3(metersPerUnit, -metersPerUnit, metersPerUnit)
+                          : new Vector3(metersPerUnit, metersPerUnit, -metersPerUnit),
                 );
                 container.transformNodes.push(root);
                 container.rootNodes.push(root);
@@ -428,6 +432,11 @@ export async function materializeCommandBuffers(
                     throw new Error(`Mesh ${id} references missing geometry ${geometryId}.`);
                 }
                 const mesh = new Mesh(stringAt(dataBuffer, nameOffset, nameLength), scene);
+                const sourceIsRightHanded = !(flags & MeshFlags.LeftHanded);
+                mesh.sideOrientation =
+                    scene.useRightHandedSystem === sourceIsRightHanded
+                        ? Material.CounterClockWiseSideOrientation
+                        : Material.ClockWiseSideOrientation;
                 mesh.parent = nodes.get(nodeId) ?? root ?? null;
                 const vertexData = new VertexData();
                 assertRange(
@@ -568,7 +577,7 @@ export async function materializeCommandBuffers(
 
                 const submeshView = new DataView(dataBuffer);
                 assertRange(dataBuffer, submeshesOffset, submeshCount * 5, 4, "submeshes");
-                const doubleSided = Boolean(flags & 1);
+                const doubleSided = Boolean(flags & MeshFlags.DoubleSided);
                 const materialForMesh = (id: number): PBRMaterial | null => {
                     const material = materials.get(id);
                     if (!material || !doubleSided || !material.backFaceCulling) {

@@ -14,6 +14,9 @@ JavaScript performs no per-prim OpenUSD calls and no intermediate GLB or JSON se
 The direct Wasm module traverses the stage with Pixar OpenUSD APIs and does not link Adobe
 USD-Fileformat-plugins scene-reading or export code.
 
+The module reads the composed `UsdStage` directly. It does not flatten the stage, serialize
+a temporary USD layer, or reopen one before extraction.
+
 ```ts
 import { loadUsdIntoSceneAsync } from "@openusd-wasm/babylon";
 
@@ -59,6 +62,11 @@ range before constructing Babylon objects. It currently covers:
   influences;
 - shared source meshes with Babylon instances;
 - skeletons, node animation, and skeletal animation.
+
+Mesh winding follows USD's `orientation` metadata and Babylon's current left-/right-handed
+scene convention. The loader keeps back-face culling enabled for single-sided geometry and
+corrects strongly inconsistent authored-normal/topology combinations per mesh instead of
+making every material double-sided.
 
 The direct path intentionally does not create a reusable GLB or `.babylon` file. Use
 `usd-web-gltf` when the converted result must be cached, downloaded, or consumed by another

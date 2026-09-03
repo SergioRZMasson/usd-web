@@ -42,6 +42,12 @@ enum MaterialFlags : uint32_t
     MaterialAlphaBlend = 1u << 2,
 };
 
+enum MeshFlags : uint32_t
+{
+    MeshDoubleSided = 1u << 0,
+    MeshLeftHanded = 1u << 1,
+};
+
 enum GeometryFlags : uint32_t
 {
     GeometryHasNormals = 1u << 0,
