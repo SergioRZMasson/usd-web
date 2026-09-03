@@ -306,14 +306,13 @@ target_include_directories(usdDirectScene
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src/direct"
     PRIVATE
-        "${ADOBE_PLUGINS_DIR}/gltf/src"
+        "${MESHOPTIMIZER_DIR}/src"
 )
 if(EMSCRIPTEN)
     target_compile_options(usdDirectScene PRIVATE -O3 -msimd128 -flto)
 endif()
 target_link_libraries(usdDirectScene PUBLIC
-    fileformatUtils
-    usdGltf
+    meshoptimizer
     usd usdGeom usdSkel usdShade
 )
 if(TARGET usd_m)

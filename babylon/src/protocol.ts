@@ -1,5 +1,5 @@
 export const COMMAND_MAGIC = 0x42445355;
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const MISSING_OFFSET = 0xffffffff;
 
 export const enum Command {
@@ -55,7 +55,7 @@ function expectedPayloadLength(opcode: Command): number {
         case Command.Texture:
             return 40;
         case Command.Material:
-            return 56;
+            return 76;
         case Command.TransformNode:
         case Command.Skeleton:
             return 20;

@@ -456,6 +456,10 @@ async function runLoad(generation, asset) {
                 ['Heap → JavaScript', `${timings.heapCopyMs.toFixed(0)} ms`],
                 ['Command buffer', formatBytes(statistics.commandBytes)],
                 ['Raw data buffer', formatBytes(statistics.dataBytes)],
+                ['Source meshes', statistics.meshes.toLocaleString()],
+                ['Native instances', statistics.instances.toLocaleString()],
+                ['Unique vertices', statistics.vertices.toLocaleString()],
+                ['Unique triangles', statistics.triangles.toLocaleString()],
             ];
         } else {
             const {

@@ -2,8 +2,6 @@
 
 #include "../webResolver.h"
 
-#include <fileformatutils/layerRead.h>
-
 #include <pxr/base/tf/diagnostic.h>
 #include <pxr/base/tf/diagnosticMgr.h>
 #include <pxr/base/tf/stringUtils.h>
@@ -91,15 +89,14 @@ public:
 
     void complete(usd_web::direct::SceneBuffers&& buffers,
                   double totalMs,
-                  double stageOpenMs,
-                  double stageReadMs)
+                  double stageOpenMs)
     {
         m_ok = true;
         m_commands = std::move(buffers.commands);
         m_data = std::move(buffers.data);
         m_totalMs = totalMs;
         m_stageOpenMs = stageOpenMs;
-        m_stageReadMs = stageReadMs;
+        m_stageReadMs = buffers.stageReadMs;
         m_preparationMs = buffers.preparationMs;
         m_packingMs = buffers.packingMs;
         m_nodeCount = buffers.nodeCount;
@@ -144,20 +141,8 @@ extract(const std::string& inputPath)
         return result;
     }
 
-    adobe::usd::ReadLayerOptions options;
-    options.triangulate = true;
-    options.ignoreInvisible = true;
-    options.maxMeshInfluenceCount = 8;
-    adobe::usd::UsdData usd;
-    const auto readStarted = std::chrono::steady_clock::now();
-    if (!adobe::usd::readStage(options, stage, usd, "directBabylon")) {
-        result->fail("Could not extract the composed USD stage.");
-        return result;
-    }
-    const auto readFinished = std::chrono::steady_clock::now();
-
     usd_web::direct::SceneBuffers buffers;
-    if (!usd_web::direct::buildSceneBuffers(usd, buffers)) {
+    if (!usd_web::direct::buildSceneBuffers(stage, buffers)) {
         result->fail("Could not build the Babylon command buffers.");
         return result;
     }
@@ -165,8 +150,7 @@ extract(const std::string& inputPath)
     result->complete(
       std::move(buffers),
       std::chrono::duration<double, std::milli>(finished - totalStarted).count(),
-      std::chrono::duration<double, std::milli>(openFinished - openStarted).count(),
-      std::chrono::duration<double, std::milli>(readFinished - readStarted).count());
+      std::chrono::duration<double, std::milli>(openFinished - openStarted).count());
     return result;
 }
 

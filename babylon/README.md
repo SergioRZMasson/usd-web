@@ -11,6 +11,8 @@ stage in C++ and returns two transferable buffers:
   skinning data, and animation samples.
 
 JavaScript performs no per-prim OpenUSD calls and no intermediate GLB or JSON serialization.
+The direct Wasm module traverses the stage with Pixar OpenUSD APIs and does not link Adobe
+USD-Fileformat-plugins scene-reading or export code.
 
 ```ts
 import { loadUsdIntoSceneAsync } from "@openusd-wasm/babylon";
@@ -51,7 +53,8 @@ range before constructing Babylon objects. It currently covers:
 
 - composed transform hierarchies and root axis/unit conversion;
 - PBR metallic-roughness materials, packed base-color/opacity and ORM textures, normal and
-  emissive textures, UV transforms, alpha modes, and double-sided materials;
+  emissive textures, opacity/ORM output-channel metadata, UV transforms, alpha modes, and
+  double-sided materials;
 - optimized indexed geometry, material subsets, vertex colors, and up to eight skinning
   influences;
 - shared source meshes with Babylon instances;
@@ -60,3 +63,9 @@ range before constructing Babylon objects. It currently covers:
 The direct path intentionally does not create a reusable GLB or `.babylon` file. Use
 `usd-web-gltf` when the converted result must be cached, downloaded, or consumed by another
 renderer.
+
+This initial OpenUSD-only material implementation targets `UsdPreviewSurface`. It reports
+unsupported surface shaders, separately authored metallic/roughness maps that cannot be
+represented by Babylon's packed metallic texture, conflicting UV sets, and texture formats
+that browsers cannot decode directly. Cameras, lights, blend shapes, and analytic gprim
+tessellation are not yet part of the command protocol.

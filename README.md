@@ -37,9 +37,10 @@ Adobe maintain a high-quality USD→glTF translator in
 [USD-Fileformat-plugins](https://github.com/adobe/USD-Fileformat-plugins).
 
 This project makes that translator run in the browser, includes an export-only `.babylon`
-file format plugin, and provides a direct C++ bridge for Babylon.js. The direct bridge reads
-the composed stage without flattening and returns a versioned command queue plus aligned raw
-texture, geometry, skinning, matrix, and animation data.
+file format plugin, and provides a direct C++ bridge for Babylon.js. The direct bridge uses
+the Pixar OpenUSD SDK directly—without Adobe scene-reading code—to traverse the composed
+stage and return a versioned command queue plus aligned raw texture, geometry, skinning,
+matrix, and animation data.
 
 ### The key finding: USD plugins work in WebAssembly
 
@@ -77,10 +78,11 @@ Release SIMD/LTO build, OpenUSD 26.05, no imaging, no Python, single-threaded:
 |---|---:|---:|---:|
 | `usd-web-gltf.wasm` | 10.69 MB | 2.85 MB | 1.79 MB |
 | `usd-web-babylon.wasm` | 9.79 MB | 2.57 MB | 1.61 MB |
-| `openusd-babylon.wasm` | 9.46 MB | 2.47 MB | 1.54 MB |
+| `openusd-babylon.wasm` | 8.88 MB | 2.31 MB | 1.43 MB |
 
-The direct bridge is the smallest module because it does not link an output file-format
-plugin. Each module has its own roughly 0.76 MB USD resource bundle.
+The direct bridge is the smallest module because it links neither an output file-format
+plugin nor Adobe's `fileformatUtils`. Each module has its own roughly 0.76 MB USD resource
+bundle.
 
 **Serve the `.wasm` with brotli.** It is the difference between 12 MB and 1.9 MB on the wire.
 
@@ -237,26 +239,33 @@ not part of the repository.
 
 ### Direct Babylon command-buffer results
 
-The direct backend opens the composed `UsdStage`, calls the shared `readStage` traversal
-without flattening or reopening a layer, and packs all Babylon instructions in C++. The
-`@openusd-wasm/babylon` package materializes those buffers on the main thread after worker
-extraction.
+The direct backend opens the composed `UsdStage` and handles traversal, instance-proxy
+deduplication, primvar interpolation, triangulation, material binding, `UsdPreviewSurface`,
+`UsdSkel`, vertex welding, and command packing in new OpenUSD-based code. It does not call
+Adobe `readStage`, construct Adobe `UsdData`, or link `fileformatUtils`/`usdGltf`.
 
-Single-run browser measurements from the same headless Chrome session configuration:
+Warm browser conversions below are averages of three conversions in persistent Wasm
+instances. Both direct implementations used the same stage, worker, protocol consumer, and
+meshoptimizer settings:
 
-|Input|Backend|Native conversion|Babylon load/materialize|Browser total|Intermediate|
-|---|---:|---:|---:|---:|---:|
-|botsinbox|GLB|1,070 ms|139 ms|2,218 ms|10.21 MB|
-|botsinbox|Babylon JSON|1,119 ms|110 ms|2,151 ms|38.89 MB|
-|botsinbox|Direct|891 ms|35 ms|1,980 ms|22.61 MB|
-|botsinbox 2|GLB|841 ms|132 ms|988 ms|7.81 MB|
-|botsinbox 2|Babylon JSON|883 ms|84 ms|981 ms|27.69 MB|
-|botsinbox 2|Direct|753 ms|28 ms|797 ms|15.06 MB|
+|Input|Direct implementation|Stage open|Stage read|Mesh preparation|Command packing|Native total|Intermediate|
+|---|---|---:|---:|---:|---:|---:|---:|
+|botsinbox|Adobe `UsdData` baseline|541 ms|31 ms|111 ms|39 ms|723 ms|22.61 MB|
+|botsinbox|OpenUSD-only|538 ms|34 ms|89 ms|3 ms|**666 ms**|22.57 MB|
+|botsinbox 2|Adobe `UsdData` baseline|450 ms|18 ms|82 ms|26 ms|577 ms|15.06 MB|
+|botsinbox 2|OpenUSD-only|451 ms|23 ms|65 ms|1 ms|**541 ms**|15.03 MB|
 
-The direct path was 8-19% faster end to end in these runs and reduced Babylon object
-creation to 28-35 ms. Its raw geometry buffer is larger than meshopt GLB, but 42-46% smaller
-than Babylon JSON. It also preserves source meshes and instances directly instead of making
-Babylon's glTF loader expand material primitives into thousands of runtime mesh objects.
+The OpenUSD-only implementation is **7.9% faster on botsinbox and 6.2% faster on botsinbox
+2**. Stage traversal itself is similar or slightly slower; the gain comes from preparing
+the final vertex streams directly and reducing command packing by 93-96%. Both paths emit
+57 source meshes plus 16 instances and 554,439 unique vertices for botsinbox, and 27 meshes
+with 387,289 vertices for botsinbox 2.
+
+The baseline supports composed transform hierarchies, instance proxies, material subsets,
+`UsdPreviewSurface`, texture UV transforms, up to eight skinning influences, node animation,
+and skeletal animation. Unsupported shader models, incompatible metallic/roughness texture
+layouts, conflicting UV sets, blend shapes, cameras, and lights are reported or omitted
+rather than silently approximated.
 
 ### OpenUSD and exporter phase timing
 

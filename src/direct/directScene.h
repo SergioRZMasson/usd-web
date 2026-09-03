@@ -1,6 +1,6 @@
 #pragma once
 
-#include <fileformatutils/usdData.h>
+#include <pxr/usd/usd/stage.h>
 
 #include <cstdint>
 #include <vector>
@@ -11,6 +11,7 @@ struct SceneBuffers
 {
     std::vector<uint8_t> commands;
     std::vector<uint8_t> data;
+    double stageReadMs = 0.0;
     double preparationMs = 0.0;
     double packingMs = 0.0;
     uint32_t nodeCount = 0;
@@ -22,6 +23,6 @@ struct SceneBuffers
 };
 
 bool
-buildSceneBuffers(adobe::usd::UsdData& usd, SceneBuffers& result);
+buildSceneBuffers(const PXR_NS::UsdStageRefPtr& stage, SceneBuffers& result);
 
 } // namespace usd_web::direct

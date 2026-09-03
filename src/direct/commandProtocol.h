@@ -5,7 +5,7 @@
 namespace usd_web::direct {
 
 constexpr uint32_t kCommandMagic = 0x42445355; // "USDB"
-constexpr uint16_t kProtocolVersion = 2;
+constexpr uint16_t kProtocolVersion = 3;
 constexpr uint32_t kMissingOffset = 0xffffffffu;
 
 enum class Command : uint16_t

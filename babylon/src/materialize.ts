@@ -154,6 +154,7 @@ export async function materializeCommandBuffers(
     const pendingParents: Array<{ node: TransformNode; parentId: number }> = [];
     const textures = new Map<number, Texture>();
     const materials = new Map<number, PBRMaterial>();
+    const doubleSidedMaterials = new Map<number, PBRMaterial>();
     const skeletons = new Map<number, Skeleton>();
     const bones = new Map<number, Bone>();
     const geometries = new Map<number, GeometryDescriptor>();
@@ -253,9 +254,14 @@ export async function materializeCommandBuffers(
                 const alphaCutoff = payload.f32();
                 const flags = payload.u32();
                 const baseTexture = payload.u32();
+                const opacityTexture = payload.u32();
                 const normalTexture = payload.u32();
                 const ormTexture = payload.u32();
                 const emissiveTexture = payload.u32();
+                const opacityChannel = payload.u32();
+                const roughnessChannel = payload.u32();
+                const metallicChannel = payload.u32();
+                const occlusionChannel = payload.u32();
                 assertRange(dataBuffer, baseOffset, 4, 4, "material base color");
                 assertRange(dataBuffer, emissiveOffset, 3, 4, "material emissive color");
                 const base = new Float32Array(dataBuffer, baseOffset, 4);
@@ -283,8 +289,19 @@ export async function materializeCommandBuffers(
                 }
                 if (baseTexture !== MISSING_OFFSET) {
                     material.albedoTexture = textures.get(baseTexture) ?? null;
-                    if (material.albedoTexture && flags & MaterialFlags.AlphaBlend) {
+                    if (
+                        material.albedoTexture &&
+                        opacityTexture === MISSING_OFFSET &&
+                        flags & MaterialFlags.AlphaBlend
+                    ) {
                         material.albedoTexture.hasAlpha = true;
+                    }
+                }
+                if (opacityTexture !== MISSING_OFFSET) {
+                    material.opacityTexture = textures.get(opacityTexture) ?? null;
+                    if (material.opacityTexture) {
+                        material.opacityTexture.gammaSpace = false;
+                        material.opacityTexture.getAlphaFromRGB = opacityChannel !== 3;
                     }
                 }
                 if (normalTexture !== MISSING_OFFSET) {
@@ -298,10 +315,14 @@ export async function materializeCommandBuffers(
                     material.metallicTexture = textures.get(ormTexture) ?? null;
                     if (material.metallicTexture) {
                         material.metallicTexture.gammaSpace = false;
-                        material.useRoughnessFromMetallicTextureAlpha = false;
-                        material.useRoughnessFromMetallicTextureGreen = true;
-                        material.useMetallnessFromMetallicTextureBlue = true;
-                        material.useAmbientOcclusionFromMetallicTextureRed = true;
+                        material.useRoughnessFromMetallicTextureAlpha =
+                            roughnessChannel === 3;
+                        material.useRoughnessFromMetallicTextureGreen =
+                            roughnessChannel === 1;
+                        material.useMetallnessFromMetallicTextureBlue =
+                            metallicChannel === 2;
+                        material.useAmbientOcclusionFromMetallicTextureRed =
+                            occlusionChannel === 0;
                     }
                 }
                 if (emissiveTexture !== MISSING_OFFSET) {
@@ -547,14 +568,30 @@ export async function materializeCommandBuffers(
 
                 const submeshView = new DataView(dataBuffer);
                 assertRange(dataBuffer, submeshesOffset, submeshCount * 5, 4, "submeshes");
+                const doubleSided = Boolean(flags & 1);
+                const materialForMesh = (id: number): PBRMaterial | null => {
+                    const material = materials.get(id);
+                    if (!material || !doubleSided || !material.backFaceCulling) {
+                        return material ?? null;
+                    }
+                    let variant = doubleSidedMaterials.get(id);
+                    if (!variant) {
+                        variant = material.clone(`${material.name} (double-sided)`);
+                        variant.backFaceCulling = false;
+                        variant.twoSidedLighting = true;
+                        doubleSidedMaterials.set(id, variant);
+                        container.materials.push(variant);
+                    }
+                    return variant;
+                };
                 if (submeshCount === 1 && materialId !== MISSING_OFFSET) {
-                    mesh.material = materials.get(materialId) ?? null;
+                    mesh.material = materialForMesh(materialId);
                 } else {
                     const multi = new MultiMaterial(`${mesh.name} materials`, scene);
                     for (let index = 0; index < submeshCount; ++index) {
                         const offset = submeshesOffset + index * 20;
                         multi.subMaterials.push(
-                            materials.get(submeshView.getUint32(offset, true)) ?? null,
+                            materialForMesh(submeshView.getUint32(offset, true)),
                         );
                     }
                     mesh.material = multi;
@@ -572,7 +609,6 @@ export async function materializeCommandBuffers(
                         mesh,
                     );
                 }
-                void flags;
                 meshes.set(id, mesh);
                 container.meshes.push(mesh);
                 if (mesh.geometry) {
